@@ -4,14 +4,15 @@
 #include <libmaple/gpio.h>
 
 
-const int BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
-const int BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
+const uint8_t BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
+const uint8_t BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
+const uint8_t BOARD_USART1_CK_PIN  = 27;
 
 
 // Configure RTS/CTS flow control for the given USART.  (libmaple doesn't
 // have the hooks for flow control.)
 static void setup_hw_flow_control(struct usart_dev * const udev,
-        const int rts_pin, const int cts_pin)
+        const uint8_t rts_pin, const uint8_t cts_pin)
 {
     udev->regs->CR3 |= USART_CR3_CTSE_BIT;
     udev->regs->CR3 |= USART_CR3_RTSE_BIT;
@@ -27,10 +28,11 @@ namespace rl_status {
     enum type { OK, FULL_BUFFER, TIMEOUT };
 }
 
+const uint32_t TIMEOUT_NONE = -1;
 
-// Read a line from serial port <serial>, stopping at CRLF.
-// If a character cannot be read for more than <timeout> msec, the
-// function terminates; setting <timeout>==0 disables the timeout.
+// Read a line from serial port <serial>, stopping at \n.  Carriage returns are
+// discarded. If a character cannot be read for more than <timeout> msec, the
+// function terminates; setting <timeout>==TIMEOUT_NONE permits an indefinite wait.
 //
 // Upon success, the buffer is null-terminated.
 //
@@ -42,7 +44,7 @@ static rl_status::type read_line(HardwareSerial * const serial, char * const buf
     while (true) {
         const uint32_t start_time = millis();
         while (!serial->available() &&
-                (!timeout || millis() - start_time < timeout));
+                (timeout == TIMEOUT_NONE || millis() - start_time < timeout));
         if (serial->available()) {
             const char c = static_cast<char>(serial->read());
             if (c == '\r') {
@@ -70,144 +72,144 @@ static rl_status::type read_line(HardwareSerial * const serial, char * const buf
 }
 
 
-namespace cmd_status {
-    enum type { 
-        CMD_AOK,        // Command accepted by RN42
-        CMD_ERR,        // Command rejected by RN42 as invalid
-        CMD_UNREC,      // Command received by RN42, and not recognized
-        COMM_ERROR      // Serial communication error
-    };
+namespace rn42_state {
+    enum type { RESET, COMMAND_MODE, DATA_MODE, UNKNOWN };
 }
 
 class RN42
 {
 private:
-    HardwareSerial * const serial;
+    HardwareSerial * const ser;
+    const uint8_t reset_pin;
+    const uint8_t conn_pin;
+    rn42_state::type state;
 
-    // Send a '\r'-terminated command, and wait for the AOK response.
-    cmd_status::type issue_command(const char * cmd)
-    {
-        serial->flush();
-        serial->print(cmd);
-
-        char buf[4];
-        if (read_line(serial, buf, sizeof(buf), 200) != rl_status::OK) {
-            SerialUSB.println("comm error");
-            return cmd_status::COMM_ERROR;
-        }
-        SerialUSB.println(buf);
-
-        if (std::strcmp(buf, "AOK") == 0) {
-            return cmd_status::CMD_AOK;
-        } else if (std::strcmp(buf, "ERR") == 0) {
-            return cmd_status::CMD_ERR;
-        } else if (std::strcmp(buf, "?") == 0) {
-            return cmd_status::CMD_UNREC;
-        } else {
-            return cmd_status::COMM_ERROR;
-        }
-    }
-
-
-public:
-    RN42(HardwareSerial * serial_, int rts_pin, int cts_pin) :
-        serial (serial_)
-    {
-        setup_hw_flow_control(serial->c_dev(), rts_pin, cts_pin);
-        serial->begin(115200);
-    }
-
-    // Asserts chip reset to the RN42.  After chip reset completes,
-    // the device is placed in Command Mode.
+    // Attempts to enter Command Mode.
     //
-    // Returns: true if command mode negotiated, false otherwise
-    bool reset(void)
+    // Returns: true if successful, false if the current state is unknown.
+    bool enter_command_mode(void)
     {
-        // TODO: assert chip reset... don't have the wire yet.
+        if (state == rn42_state::COMMAND_MODE) {
+            return true;
+        }
 
-        serial->flush();
+        if (state != rn42_state::DATA_MODE) {
+            reset();
+        }
+
+        ser->flush();
 
         // One-second halt in upstream traffic is required on both sides
         // of the command code
         delay(1100);
-        serial->print("$$$");
+        ser->print("$$$");
         delay(1100);
 
-        // Expected response is "CMD\r"
+        // Expected response is "CMD"
         char buf[4];
-        if (read_line(serial, buf, sizeof(buf), 200) != rl_status::OK) {
+        if (read_line(ser, buf, sizeof(buf), 200) != rl_status::OK) {
             return false;
         }
-        return std::strcmp(buf, "CMD") == 0;
+        state = std::strcmp(buf, "CMD") == 0 ? rn42_state::COMMAND_MODE : rn42_state::UNKNOWN;
+        return state == rn42_state::COMMAND_MODE;
     }
 
+public:
+    struct PinAssignments
+    {
+        uint8_t rts;        // USART RTS pin
+        uint8_t cts;        // USART CTS pin
+        uint8_t reset;      // GPIO wired to active-low RN42 reset
+        uint8_t conn;       // GPIO wired to RN42 pin 13 (connection status)
+    };
 
-    // Temporarily disables connections.
+    // Construct a new instance using the given serial port and
+    // pin assignments.  The chip is held in reset.
+    RN42(HardwareSerial * serial_, const PinAssignments & pins) :
+        ser       (serial_),
+        reset_pin (pins.reset),
+        conn_pin  (pins.conn),
+        state     (rn42_state::RESET)
+    {
+        setup_hw_flow_control(ser->c_dev(), pins.rts, pins.cts);
+        ser->begin(115200);
+
+        pinMode(conn_pin,  INPUT);
+        pinMode(reset_pin, OUTPUT);
+        assert_reset();
+    }
+
+    // Asserts chip reset to the RN42.  The chip should come up in
+    // Data Mode.
+    void reset(void)
+    {
+        assert_reset();
+        // Datasheet says a 160us pulse, but that seems inadequate.
+        delay(10);
+        clear_reset();
+    }
+
+    // Asserts the reset signal to the RN42.  While in reset the
+    // chip consumes ~1.5mA; this compares favorably to the "deep sleep"
+    // mode which consumes more like 5mA.
+    void assert_reset(void)
+    {
+        digitalWrite(reset_pin, LOW);
+        state = rn42_state::RESET;
+    }
+
+    // Clears the reset signal to the RN42.  The chip should come up
+    // in Data Mode.
+    void clear_reset(void)
+    {
+        digitalWrite(reset_pin, HIGH);
+        state = rn42_state::DATA_MODE;
+    }
+
+    // Force the RN42 to enter Fast Data Mode as soon as a connection is
+    // available.
     //
-    // Returns: command status
-    cmd_status::type disable_connections(void)
-    {
-        serial->flush();
-        serial->print("Q\r");
-        char buf[6];
-        if (read_line(serial, buf, sizeof(buf), 200) != rl_status::OK) {
-            return cmd_status::COMM_ERROR;
-        }
-        // User's Guide says this should return "Quiet", but that looks incorrect.
-        return std::strcmp(buf, "Q=0") == 0 ? cmd_status::CMD_AOK : cmd_status::COMM_ERROR;
-    }
-
-
-    // Places the RN42 in a low power state which persists until reset.
+    // By default, the RN42 has a 60-second configuration window in which it will
+    // snoop the data stream (in both directions) for an escape sequence which
+    // enables command mode.  Unfortunately, this "Data Mode" seems really
+    // glitchy.  So we disable it in favor of using the "Fast Data Mode" which
+    // passes all data.  We can still configure the chip using the local serial
+    // port as long as there is no connection.
     //
-    // Returns: true if rn42 is nonresponsive, false if the USART shows activity
-    bool enter_low_power_mode(void)
+    // Returns: true if successful, false otherwise.
+    bool enter_fast_data_mode(void)
     {
-        if (disable_connections() != cmd_status::CMD_AOK) {
-            SerialUSB.println("Warning: failed to disable connections.");
+        if (!enter_command_mode()) {
+            return false;
         }
-        serial->flush();
 
-        serial->print("Z\r");
-        delay(100);
-        return !serial->available();
+        ser->flush();
+        ser->print("ST,0\r");
+
+        // Expected response is "AOK"
+        char buf[4];
+        if (read_line(ser, buf, sizeof(buf), 200) != rl_status::OK ||
+                std::strcmp(buf, "AOK") != 0) {
+            return false;
+        }
+
+        // "Set" commands only take effect after reset
+        reset();
+        return true;
     }
 
-
-    cmd_status::type reboot(void)
+    // Returns: RN42 connection state
+    bool is_connected(void)
     {
-        return issue_command("R,1\r");
+        return digitalRead(conn_pin) == HIGH;
     }
 
-
-    cmd_status::type get_command(const char * command, char * response, size_t response_len)
+    // Returns: handle to the serial device attached to the RN42
+    HardwareSerial * serial(void)
     {
-        serial->print(command);
-        if (read_line(serial, response, response_len, 200) != rl_status::OK) {
-            return cmd_status::COMM_ERROR;
-        }
-        return cmd_status::CMD_AOK;
+        return ser;
     }
 };
-
-
-static void print_cmd_status(cmd_status::type st)
-{
-    switch (st) {
-        case cmd_status::CMD_AOK:
-            SerialUSB.print("AOK");
-            break;
-        case cmd_status::CMD_ERR:
-            SerialUSB.print("ERR");
-            break;
-        case cmd_status::CMD_UNREC:
-            SerialUSB.print("?");
-            break;
-        case cmd_status::COMM_ERROR:
-            SerialUSB.print("COMM ERROR");
-            break;
-    }
-}
 
 
 // Force init to be called *first*, i.e. before static object allocation.
@@ -217,30 +219,109 @@ __attribute__((constructor)) void premain() {
 }
 
 
+struct fsm_context
+{
+    RN42 * const rn42;
+    void (*state)(struct fsm_context *);
+};
+
+void state_reset_connection(struct fsm_context * ctx);
+void state_wait_connection (struct fsm_context * ctx);
+void state_send_data       (struct fsm_context * ctx);
+void state_wait_checksum   (struct fsm_context * ctx);
+void state_idle            (struct fsm_context * ctx);
+
+
+void state_reset_connection(struct fsm_context * ctx)
+{
+    SerialUSB.println("Resetting link...");
+    ctx->rn42->reset();
+    ctx->state = state_wait_connection;
+}
+
+
+void state_wait_connection(struct fsm_context * ctx)
+{
+    SerialUSB.println("Waiting for connection...");
+    while (!ctx->rn42->is_connected()) {
+        toggleLED();
+        delay(100);
+    }
+
+    ctx->state = state_send_data;
+}
+
+
+void state_send_data(struct fsm_context * ctx)
+{
+    SerialUSB.println("Sending data...");
+    ctx->rn42->serial()->println("100");
+    for (int i = 0; i < 100; i++) {
+        if (!ctx->rn42->is_connected()) {
+            ctx->state = state_reset_connection;
+            return;
+        }
+        toggleLED();
+        ctx->rn42->serial()->print(i);
+        ctx->rn42->serial()->print("\r\n");
+    }
+
+    ctx->state = state_wait_checksum;
+}
+
+
+void state_wait_checksum(struct fsm_context * ctx)
+{
+    SerialUSB.println("Waiting for checksum...");
+    char buf[10];
+    if (!ctx->rn42->is_connected() ||
+            read_line(ctx->rn42->serial(), buf, sizeof(buf), 1000) != rl_status::OK) {
+        // Reset the RN42, reestablish the link, and try again
+        ctx->state = state_reset_connection;
+        return;
+    }
+
+    ctx->rn42->assert_reset();
+    ctx->state = state_idle;
+}
+
+
+void state_idle(struct fsm_context * ctx)
+{
+    SerialUSB.println("Idling.");
+    toggleLED();
+    delay(500);
+}
+
+
 int main(void) {
     pinMode(BOARD_LED_PIN, OUTPUT);
 
-    RN42 rn42(&Serial3, BOARD_USART3_RTS_PIN, BOARD_USART3_CTS_PIN);
-    const bool reset_status = rn42.reset();
-    if (!reset_status) {
-        SerialUSB.println("Error: unable to reset RN42.");
+    RN42::PinAssignments rn42_pins;
+    rn42_pins.cts   = BOARD_USART3_RTS_PIN;
+    rn42_pins.rts   = BOARD_USART3_CTS_PIN;
+    rn42_pins.reset = BOARD_SPI2_MOSI_PIN;
+    rn42_pins.conn  = BOARD_USART1_CK_PIN;
+
+    RN42 rn42(&Serial3, rn42_pins);
+
+    {
+        delay(5000);
+        SerialUSB.println("Now entering Fast Data Mode.");
+        const bool st = rn42.enter_fast_data_mode();
+        SerialUSB.print("Fast Data Mode status: ");
+        SerialUSB.println(st ? "ok" : "failed");
     }
 
-    delay(5000);
-    SerialUSB.print("low power: ");
-    SerialUSB.println(rn42.enter_low_power_mode() ? "true" : "false");
-    while (true) {
-        const char c = static_cast<char>(Serial3.read());
-        SerialUSB.write(c);
-    }
+    struct fsm_context ctx = {
+        &rn42,
+        state_wait_connection
+    };
 
     while (true) {
-        SerialUSB.print("Reset status: ");
-        SerialUSB.println(reset_status ? "true" : "false");
-
-        toggleLED();
-        delay(300);
+        ctx.state(&ctx);
     }
 
     return 0;
 }
+
