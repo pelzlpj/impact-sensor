@@ -28,7 +28,7 @@ namespace rl_status {
 }
 
 
-// Read a line from serial port <serial>, stopping at carriage return.
+// Read a line from serial port <serial>, stopping at CRLF.
 // If a character cannot be read for more than <timeout> msec, the
 // function terminates; setting <timeout>==0 disables the timeout.
 //
@@ -46,6 +46,8 @@ static rl_status::type read_line(HardwareSerial * const serial, char * const buf
         if (serial->available()) {
             const char c = static_cast<char>(serial->read());
             if (c == '\r') {
+                // silently discard
+            } else if (c == '\n') {
                 if (chars_read < buf_len) {
                     buf[chars_read] = '\0';
                     return rl_status::OK;
@@ -90,8 +92,10 @@ private:
 
         char buf[4];
         if (read_line(serial, buf, sizeof(buf), 200) != rl_status::OK) {
+            SerialUSB.println("comm error");
             return cmd_status::COMM_ERROR;
         }
+        SerialUSB.println(buf);
 
         if (std::strcmp(buf, "AOK") == 0) {
             return cmd_status::CMD_AOK;
@@ -138,29 +142,43 @@ public:
     }
 
 
-    // Places the RN42 in deep sleep mode (section 5.3 of Advanced User
-    // Manual).  Must be invoked from Command Mode.
+    // Temporarily disables connections.
     //
     // Returns: command status
-    cmd_status::type set_deep_sleep_mode(void)
+    cmd_status::type disable_connections(void)
     {
-        return issue_command("SW,FFFF\r");
+        serial->flush();
+        serial->print("Q\r");
+        char buf[6];
+        if (read_line(serial, buf, sizeof(buf), 200) != rl_status::OK) {
+            return cmd_status::COMM_ERROR;
+        }
+        // User's Guide says this should return "Quiet", but that looks incorrect.
+        return std::strcmp(buf, "Q=0") == 0 ? cmd_status::CMD_AOK : cmd_status::COMM_ERROR;
     }
 
 
-    // Places the RN42 in active mode (SNIFF disabled).  Must be invoked
-    // from Command Mode.
+    // Places the RN42 in a low power state which persists until reset.
     //
-    // Returns: command status
-    cmd_status::type set_active_mode(void)
+    // Returns: true if rn42 is nonresponsive, false if the USART shows activity
+    bool enter_low_power_mode(void)
     {
-        return issue_command("SW,0000\r");
+        if (disable_connections() != cmd_status::CMD_AOK) {
+            SerialUSB.println("Warning: failed to disable connections.");
+        }
+        serial->flush();
+
+        serial->print("Z\r");
+        delay(100);
+        return !serial->available();
     }
+
 
     cmd_status::type reboot(void)
     {
         return issue_command("R,1\r");
     }
+
 
     cmd_status::type get_command(const char * command, char * response, size_t response_len)
     {
@@ -208,37 +226,17 @@ int main(void) {
         SerialUSB.println("Error: unable to reset RN42.");
     }
 
-    char buf[80];
-    delay(2000);
-    cmd_status::type gw_status = rn42.get_command("GW\r", buf, sizeof(buf));
-    if (gw_status != cmd_status::CMD_AOK) {
-        SerialUSB.println("Error reading GW result.");
-        print_cmd_status(gw_status);
-        SerialUSB.println("");
-    } else {
-        SerialUSB.print("GW: ");
-        SerialUSB.println(buf);
-    }
-    const cmd_status::type sleep_status  = rn42.set_deep_sleep_mode();
-    const cmd_status::type rbt_status    = rn42.reboot();
-    delay(15000);
-
-    rn42.reset();
-    gw_status = rn42.get_command("GW\r", buf, sizeof(buf));
-    if (gw_status != cmd_status::CMD_AOK) {
-        SerialUSB.println("Error reading GW result.");
-    } else {
-        SerialUSB.print("GW: ");
-        SerialUSB.println(buf);
+    delay(5000);
+    SerialUSB.print("low power: ");
+    SerialUSB.println(rn42.enter_low_power_mode() ? "true" : "false");
+    while (true) {
+        const char c = static_cast<char>(Serial3.read());
+        SerialUSB.write(c);
     }
 
     while (true) {
         SerialUSB.print("Reset status: ");
         SerialUSB.println(reset_status ? "true" : "false");
-
-        SerialUSB.print("Sleep status: ");
-        print_cmd_status(sleep_status);
-        SerialUSB.println("");
 
         toggleLED();
         delay(300);
