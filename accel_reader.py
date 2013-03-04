@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 import time
+import tty
 from zlib import adler32
 
 DOWNLOAD_IDLE_SEC = 0.1
@@ -175,6 +176,7 @@ class DataDownloader(object):
                 if dev:
                     try:
                         with open(dev, 'r+b') as f:
+                            tty.setraw(f.fileno())
                             received_ok = False
                             while not received_ok:
                                 self._request_payload(f)
