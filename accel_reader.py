@@ -2,11 +2,17 @@
 
 from __future__ import print_function
 
+import contextlib
 import logging
+import os
+import struct
 import subprocess
 import sys
 import threading
 import time
+from zlib import adler32
+
+DOWNLOAD_IDLE_SEC = 0.1
 
 
 def get_rn42_address():
@@ -30,7 +36,25 @@ def get_rn42_address():
     return None
 
 
-class RN42Connection(object):
+class UnexpectedEof(Exception):
+    def __init__(self, partial_read):
+        self.partial_read = partial_read
+
+def read_exact(f, byte_count):
+    """Read exactly the requested number of bytes from the file object,
+    or raise UnexpectedEof.
+    """
+    result = ''
+    while len(result) < byte_count:
+        bytes_remaining = byte_count - len(result)
+        data = f.read(bytes_remaining)
+        if not data:
+            raise UnexpectedEof(result)
+        result += data
+    return result
+
+
+class RN42ConnectionManager(object):
 
     def __init__(self, host_device):
         """Initiate a connection from the host device (e.g. 'hci0') to the first
@@ -108,18 +132,104 @@ class RN42Connection(object):
                     logging.info('New rfcomm device: %s' % self._rfcomm_dev)
 
 
+class DataDownloader(object):
+
+    def __init__(self, connection_manager):
+        """Use the given connection manager to retrieve data payloads
+        from an RN42-equipped device.
+        """
+        self._conn = connection_manager
+
+        self._lock           = threading.Lock()
+        self._exit_requested = False    # guarded by _lock
+        self._payload        = None     # guarded by _lock
+
+        self._thread = threading.Thread(target=self._download_thread)
+        self._thread.start()
+
+    def get_payload(self):
+        """Retrieves the most recently downloaded payload, freeing the
+        downloader to retrieve another payload.
+
+        Returns: payload (str), or None
+        """
+        with self._lock:
+            result = self._payload
+            self._payload = None
+        return result
+
+    def terminate(self):
+        """Stop downloading data as soon as possible."""
+        with self._lock:
+            self._exit_requested = True
+        self._thread.join()
+
+    def _download_thread(self):
+        while True:
+            with self._lock:
+                if self._exit_requested:
+                    return
+                payload_consumed = self._payload is None
+            if payload_consumed:
+                dev = self._conn.get_rfcomm_device()
+                if dev:
+                    try:
+                        with open(dev, 'r+b') as f:
+                            received_ok = False
+                            while not received_ok:
+                                self._request_payload(f)
+                                new_payload, checksum = self._download_payload(f)
+                                if checksum == (adler32(new_payload) & 0xffffffff):
+                                    self._ack_payload(f)
+                                    received_ok = True
+                                else:
+                                    sys.stderr.write('Bad checksum, reloading.\n')
+                    except Exception:
+                        continue
+                    with self._lock:
+                        self._payload = new_payload
+                else:
+                    time.sleep(DOWNLOAD_IDLE_SEC)
+            else:
+                time.sleep(DOWNLOAD_IDLE_SEC)
+
+    def _request_payload(self, f):
+        f.write('send\r\n')
+        f.flush()
+
+    def _download_payload(self, f):
+        print('download byte count')
+        (byte_count,) = struct.unpack('<L', read_exact(f, 4))
+        print('download payload, %u bytes' % byte_count)
+        payload = read_exact(f, byte_count)
+        for c in payload:
+            print(ord(c))
+        print('download checksum')
+        try:
+            (checksum,) = struct.unpack('<L', read_exact(f, 4))
+        except UnexpectedEof, e:
+            print('partial checksum: "%s"' % str(e.partial_read))
+            raise
+        print('checksum: 0x%x' % checksum)
+        return payload, checksum
+
+    def _ack_payload(self, f):
+        f.write('ack\r\n')
+        f.flush()
+
 
 if __name__ == '__main__':
-    conn = RN42Connection('hci0')
-    old_dev = None
+    conn = RN42ConnectionManager('hci0')
     try:
-        while True:
-            dev = conn.get_rfcomm_device()
-            if dev and not old_dev:
-                print('Connected: device %s' % dev)
-            elif (not dev) and old_dev:
-                print('No connection.')
-            old_dev = dev
+        downloader = DataDownloader(conn)
+        try:
+            while True:
+                payload = downloader.get_payload()
+                if payload is not None:
+                    print('New payload of size %u bytes.' % len(payload))
+                time.sleep(0.1)
+        finally:
+            downloader.terminate()
     finally:
         conn.terminate()
 
