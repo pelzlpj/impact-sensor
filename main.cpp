@@ -72,6 +72,22 @@ static rl_status::type read_line(HardwareSerial * const serial, char * const buf
 }
 
 
+// See Adler-32 as described in RFC 1950.
+uint32_t adler32(const uint8_t * const data, const size_t data_len, uint32_t seed = 1)
+{
+    const uint32_t ADLER_BASE = 65521;
+    uint32_t s1 = seed & 0xffff;
+    uint32_t s2 = (seed >> 16) & 0xffff;
+
+    for (size_t i = 0; i < data_len; i++) {
+        s1 = (s1 + data[i]) % ADLER_BASE;
+        s2 = (s2 + s1)      % ADLER_BASE;
+    }
+
+    return (s2 << 16) + s1;
+}
+
+
 namespace rn42_state {
     enum type { RESET, COMMAND_MODE, DATA_MODE, UNKNOWN };
 }
@@ -228,7 +244,7 @@ struct fsm_context
 void state_reset_connection(struct fsm_context * ctx);
 void state_wait_connection (struct fsm_context * ctx);
 void state_send_data       (struct fsm_context * ctx);
-void state_wait_checksum   (struct fsm_context * ctx);
+void state_wait_response   (struct fsm_context * ctx);
 void state_idle            (struct fsm_context * ctx);
 
 
@@ -248,25 +264,66 @@ void state_wait_connection(struct fsm_context * ctx)
         delay(100);
     }
 
-    ctx->state = state_send_data;
+    SerialUSB.println("Waiting for command...");
+    char buf[10];
+    if (read_line(ctx->rn42->serial(), buf, sizeof(buf), 30000) != rl_status::OK) {
+        ctx->state = state_reset_connection;
+        return;
+    }
+    if (std::strcmp(buf, "send") == 0) {
+        ctx->state = state_send_data;
+    } else {
+        SerialUSB.println("Bad command.");
+        ctx->state = state_reset_connection;
+    }
 }
 
 
 void state_send_data(struct fsm_context * ctx)
 {
     SerialUSB.println("Sending data...");
-    ctx->rn42->serial()->println("100");
-    for (int i = 0; i < 100; i++) {
+    const uint32_t byte_count = 100;
+    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >>  0));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >>  8));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >> 16));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >> 24));
+
+    uint32_t adler = 1;
+    for (uint8_t i = 0; i < byte_count; i++) {
         if (!ctx->rn42->is_connected()) {
             ctx->state = state_reset_connection;
             return;
         }
         toggleLED();
-        ctx->rn42->serial()->print(i);
-        ctx->rn42->serial()->print("\r\n");
+        ctx->rn42->serial()->write(i);
+        adler = adler32(&i, sizeof(i), adler);
     }
 
-    ctx->state = state_wait_checksum;
+    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >>  0));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >>  8));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >> 16));
+    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >> 24));
+
+    ctx->state = state_wait_response;
+}
+
+
+void state_wait_response(struct fsm_context * ctx)
+{
+    SerialUSB.println("Waiting for response...");
+    char buf[10];
+    if (!ctx->rn42->is_connected() ||
+            read_line(ctx->rn42->serial(), buf, sizeof(buf), 5000) != rl_status::OK) {
+        ctx->state = state_reset_connection;
+        return;
+    }
+    if (std::strcmp(buf, "send") == 0) {
+        SerialUSB.println("Retransmit requested.");
+        ctx->state = state_send_data;
+    } else if (std::strcmp(buf, "ack") == 0) {
+        SerialUSB.println("Payload acknowledged.");
+        ctx->state = state_idle;
+    }
 }
 
 
@@ -275,7 +332,7 @@ void state_wait_checksum(struct fsm_context * ctx)
     SerialUSB.println("Waiting for checksum...");
     char buf[10];
     if (!ctx->rn42->is_connected() ||
-            read_line(ctx->rn42->serial(), buf, sizeof(buf), 1000) != rl_status::OK) {
+            read_line(ctx->rn42->serial(), buf, sizeof(buf), 30000) != rl_status::OK) {
         // Reset the RN42, reestablish the link, and try again
         ctx->state = state_reset_connection;
         return;
