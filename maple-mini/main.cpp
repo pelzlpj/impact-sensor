@@ -111,22 +111,6 @@ void state_wait_response(struct fsm_context * ctx)
 }
 
 
-void state_wait_checksum(struct fsm_context * ctx)
-{
-    SerialUSB.println("Waiting for checksum...");
-    char buf[10];
-    if (!ctx->rn42->is_connected() ||
-            read_line(ctx->rn42->serial(), buf, sizeof(buf), 30000) != rl_status::OK) {
-        // Reset the RN42, reestablish the link, and try again
-        ctx->state = state_reset_connection;
-        return;
-    }
-
-    ctx->rn42->assert_reset();
-    ctx->state = state_idle;
-}
-
-
 void state_idle(struct fsm_context * ctx)
 {
     SerialUSB.println("Idling.");
