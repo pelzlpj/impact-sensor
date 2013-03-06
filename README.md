@@ -2,15 +2,15 @@
 This is code which drives a microcontroller assembly for collecting accelerometer readings during a
 collision event.  The hardware is composed of:
 
-    1.  A LeafLabs [Maple Mini](https://www.sparkfun.com/products/11280) board, featuring an STM32
-        microcontroller
+1.  A LeafLabs [Maple Mini](https://www.sparkfun.com/products/11280) board, featuring an STM32
+    microcontroller
 
-    2.  An Analog Devices [ADXL377](http://www.analog.com/en/mems-sensors/mems-accelerometers/adxl377/products/product.html)
-        high-g three-axis accelerometer, wired to STM32 analog inputs
+2.  An Analog Devices [ADXL377](http://www.analog.com/en/mems-sensors/mems-accelerometers/adxl377/products/product.html)
+    high-g three-axis accelerometer, wired to STM32 analog inputs
 
-    3.  A Roving Networks [RN42](http://www.rovingnetworks.com/products/RN42) bluetooth module,
-        wired to USART3 on the STM32 and used for transmitting accelerometer data for display on a
-        remote workstation.
+3.  A Roving Networks [RN42](http://www.rovingnetworks.com/products/RN42) bluetooth module,
+    wired to USART3 on the STM32 and used for transmitting accelerometer data for display on a
+    remote workstation.
 
 Directory *maple-mini* contains firmware for the STM32.
 The [libmaple repository](https://github.com/leaflabs/maplemini) must be checked out as a
@@ -22,7 +22,7 @@ bluetooth link.
 
 LICENSE
 =======
-Copyright (c) 2013 Paul Pelzl
+Copyright (c) 2013 Paul Pelzl  
 All rights reserved. 
 
 Redistribution and use in source and binary forms, with or without modification, are permitted
