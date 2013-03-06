@@ -3,6 +3,8 @@
 from __future__ import print_function
 
 import contextlib
+import errno
+import fcntl
 import logging
 import os
 import struct
@@ -40,19 +42,6 @@ def get_rn42_address():
 class UnexpectedEof(Exception):
     def __init__(self, partial_read):
         self.partial_read = partial_read
-
-def read_exact(f, byte_count):
-    """Read exactly the requested number of bytes from the file object,
-    or raise UnexpectedEof.
-    """
-    result = ''
-    while len(result) < byte_count:
-        bytes_remaining = byte_count - len(result)
-        data = f.read(bytes_remaining)
-        if not data:
-            raise UnexpectedEof(result)
-        result += data
-    return result
 
 
 class RN42ConnectionManager(object):
@@ -175,19 +164,34 @@ class DataDownloader(object):
                 dev = self._conn.get_rfcomm_device()
                 if dev:
                     try:
-                        with open(dev, 'r+b') as f:
-                            tty.setraw(f.fileno())
-                            received_ok = False
-                            while not received_ok:
-                                self._request_payload(f)
-                                new_payload, checksum = self._download_payload(f)
-                                if checksum == (adler32(new_payload) & 0xffffffff):
-                                    self._ack_payload(f)
-                                    received_ok = True
-                                else:
-                                    sys.stderr.write('Bad checksum, reloading.\n')
+                        fd = os.open(dev, os.O_RDWR)
+                    except OSError:
+                        continue
+                    try:
+                        # /dev/rfcommN is a tty; configure it in raw mode so we
+                        # read arbitrary binary data.  Set non-blocking mode
+                        # for better handling of exceptional conditions.
+                        tty.setraw(fd)
+                        flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+                        fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+                        received_ok = False
+                        while not received_ok:
+                            with self._lock:
+                                if self._exit_requested:
+                                    raise EnvironmentError()
+                            self._request_payload(fd)
+                            new_payload, checksum = self._download_payload(fd)
+                            if checksum == (adler32(new_payload) & 0xffffffff):
+                                self._ack_payload(fd)
+                                received_ok = True
+                            else:
+                                sys.stderr.write('Bad checksum, reloading.\n')
                     except Exception:
                         continue
+                    finally:
+                        os.close(fd)
+
                     with self._lock:
                         self._payload = new_payload
                 else:
@@ -195,29 +199,46 @@ class DataDownloader(object):
             else:
                 time.sleep(DOWNLOAD_IDLE_SEC)
 
-    def _request_payload(self, f):
-        f.write('send\r\n')
-        f.flush()
+    def _read_exact(self, fd, byte_count):
+        """Read exactly <byte_count> bytes, or raise UnexpectedEof."""
+        result = ''
+        while len(result) < byte_count:
+            bytes_remaining = byte_count - len(result)
+            try:
+                data = os.read(fd, bytes_remaining)
+                if not data:
+                    raise UnexpectedEof(result)
+                result += data
+            except OSError, e:
+                if e.errno == errno.EAGAIN:
+                    with self._lock:
+                        if self._exit_requested:
+                            raise UnexpectedEof(result)
+                    time.sleep(0.01)
+        return result
 
-    def _download_payload(self, f):
+
+    def _request_payload(self, fd):
+        os.write(fd, 'send\r\n')
+
+    def _download_payload(self, fd):
         print('download byte count')
-        (byte_count,) = struct.unpack('<L', read_exact(f, 4))
+        (byte_count,) = struct.unpack('<L', self._read_exact(fd, 4))
         print('download payload, %u bytes' % byte_count)
-        payload = read_exact(f, byte_count)
+        payload = self._read_exact(fd, byte_count)
         for c in payload:
             print(ord(c))
         print('download checksum')
         try:
-            (checksum,) = struct.unpack('<L', read_exact(f, 4))
+            (checksum,) = struct.unpack('<L', self._read_exact(fd, 4))
         except UnexpectedEof, e:
             print('partial checksum: "%s"' % str(e.partial_read))
             raise
         print('checksum: 0x%x' % checksum)
         return payload, checksum
 
-    def _ack_payload(self, f):
-        f.write('ack\r\n')
-        f.flush()
+    def _ack_payload(self, fd):
+        os.write(fd, 'ack\r\n')
 
 
 if __name__ == '__main__':
