@@ -30,7 +30,7 @@ include $(MAKEDIR)/build-templates.mk
 GLOBAL_CFLAGS   := -I$(LIBMAPLE_REPO)/libmaple/include -I$(LIBMAPLE_REPO)/wirish/include \
 	               -I$(LIBMAPLE_REPO)/libmaple/$(MCU_SERIES)/include \
 				   -I$(LIBMAPLE_REPO)/wirish/boards/$(BOARD)/include \
-                   -Os -g3 -gdwarf-2 -nostdlib \
+                   -Os -g3 -gdwarf-2 -nostdlib -std=gnu++0x \
                    -ffunction-sections -fdata-sections \
                    -Wl,--gc-sections $(TARGET_FLAGS)
 GLOBAL_CXXFLAGS := -fno-rtti -fno-exceptions -Wall $(TARGET_FLAGS)
@@ -40,7 +40,7 @@ LDFLAGS  = $(TARGET_LDFLAGS) $(TOOLCHAIN_LDFLAGS) -mcpu=cortex-m3 -mthumb \
            -Xassembler --march=armv7-m -Wall
 
 
-ACCEL_SRC := main.cpp
+ACCEL_SRC := util.cpp serial_util.cpp RN42.cpp main.cpp
 
 ACCEL_OBJ := $(addprefix $(BUILD_PATH)/,$(ACCEL_SRC:.cpp=.o))
 
