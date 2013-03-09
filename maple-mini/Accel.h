@@ -34,6 +34,9 @@ const size_t NUM_AXES = 3;
 
 const uint32_t CALIBRATION_MSEC = 10000;
 
+const size_t MEDIAN_FILTER_LEN = 5;
+
+
 const uint16_t MIN_12BIT  = 0;
 const uint16_t ZERO_12BIT = 2048;
 const uint16_t MAX_12BIT  = 4096;
@@ -291,6 +294,40 @@ public:
         dma_complete = false;
     }
 
+    void capture_calibration_samples(
+            RingBuffer<uint16_t> ring_buffers[NUM_AXES],
+            calib_range calib_ranges[NUM_AXES])
+    {
+        uint32_t sample_count = 0;
+        const uint32_t start_time = millis();
+        while (millis() - start_time < CALIBRATION_MSEC) {
+            uint16_t samples[NUM_AXES];
+            acquire_raw_sample(samples);
+            sample_count++;
+
+            for (size_t j = 0; j < NUM_AXES; j++) {
+                ring_buffers[j].append(samples[j]);
+
+                if (sample_count >= MEDIAN_FILTER_LEN) {
+                    const uint16_t filtered_sample =
+                        median5_filter_latest(ring_buffers[j]);
+                    if (filtered_sample < calib_ranges[j].low) {
+                        calib_ranges[j].low = filtered_sample;
+                    }
+                    if (filtered_sample > calib_ranges[j].high) {
+                        calib_ranges[j].high = filtered_sample;
+                    }
+                }
+            }
+
+            if (sample_count % 5 == 0) {
+                toggleLED();
+            }
+            delay(10);
+        }
+        SerialUSB.println("Samples captured");
+    }
+
     // Compute the zero points of the accelerometer.
     //
     // The user should slowly roll the accelerometer through all values of all
@@ -309,8 +346,7 @@ public:
             {MAX_12BIT, MIN_12BIT}
         };
 
-        const size_t WINDOW_SIZE = 5;
-        uint16_t ring_buffer_storage[NUM_AXES][WINDOW_SIZE];
+        uint16_t ring_buffer_storage[NUM_AXES][MEDIAN_FILTER_LEN];
         RingBuffer<uint16_t> ring_buffers[] = {
             RingBuffer<uint16_t>(ring_buffer_storage[0],
                     ARRAY_COUNT(ring_buffer_storage[0]), ZERO_12BIT),
@@ -320,34 +356,7 @@ public:
                     ARRAY_COUNT(ring_buffer_storage[2]), ZERO_12BIT)
         };
 
-        uint32_t sample_count = 0;
-        const uint32_t start_time = millis();
-        while (millis() - start_time < CALIBRATION_MSEC) {
-            uint16_t samples[NUM_AXES];
-            acquire_raw_sample(samples);
-            sample_count++;
-
-            for (size_t j = 0; j < NUM_AXES; j++) {
-                ring_buffers[j].append(samples[j]);
-
-                if (sample_count >= WINDOW_SIZE) {
-                    const uint16_t filtered_sample =
-                        median5_filter_latest(ring_buffers[j]);
-                    if (filtered_sample < calib_ranges[j].low) {
-                        calib_ranges[j].low = filtered_sample;
-                    }
-                    if (filtered_sample > calib_ranges[j].high) {
-                        calib_ranges[j].high = filtered_sample;
-                    }
-                }
-            }
-
-            if (sample_count % 5 == 0) {
-                toggleLED();
-            }
-            delay(10);
-        }
-        SerialUSB.println("Samples captured");
+        capture_calibration_samples(ring_buffers, calib_ranges);
 
         bool calib_ok = true;
         for (size_t j = 0; j < ARRAY_COUNT(calib_ranges); j++) {
