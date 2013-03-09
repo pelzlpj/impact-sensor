@@ -1,9 +1,9 @@
 #include <cstring>
+#include "Accel.h"
 #include <wirish/wirish.h>
 #include "RN42.h"
 #include "util.h"
 #include "serial_util.h"
-#include "Accel.h"
 
 
 using namespace libmaple_util;
@@ -128,7 +128,7 @@ int main(void) {
 
     pinMode(BOARD_LED_PIN, OUTPUT);
 
-    RN42::PinAssignments rn42_pins;
+    RN42::pin_assignments rn42_pins;
     rn42_pins.cts   = BOARD_USART3_RTS_PIN;
     rn42_pins.rts   = BOARD_USART3_CTS_PIN;
     rn42_pins.reset = BOARD_SPI2_MOSI_PIN;
@@ -155,7 +155,7 @@ int main(void) {
     }
 #endif
 
-	AccelSampler::PinAssignments accel_pins;
+	AccelSampler::pin_assignments accel_pins;
 	accel_pins.adc_x = BOARD_ADC_IN0;
 	accel_pins.adc_y = BOARD_ADC_IN1;
 	accel_pins.adc_z = BOARD_ADC_IN2;
@@ -170,21 +170,12 @@ int main(void) {
 		while (true);
 	}
 	accel.power_up_adc();
+    accel.calibrate();
 
-	while (true) {
-		SerialUSB.println("Start conversion.");
-		accel.start_adc_conversion();
-		uint16_t val[3];
-		while (!accel.read_sample(val));
-		SerialUSB.println(val[0]);
-		SerialUSB.println(val[1]);
-		SerialUSB.println(val[2]);
-
-		delay(1000);
-		if (accel.read_sample(val)) {
-			SerialUSB.println("error");
-		}
-	}
+    while (true) {
+        toggleLED();
+        delay(1000);
+    }
 
     return 0;
 }

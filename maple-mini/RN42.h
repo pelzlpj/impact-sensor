@@ -21,7 +21,7 @@ private:
     bool enter_command_mode(void);
 
 public:
-    struct PinAssignments
+    struct pin_assignments
     {
         uint8_t rts;        // USART RTS pin
         uint8_t cts;        // USART CTS pin
@@ -31,7 +31,7 @@ public:
 
     // Construct a new instance using the given serial port and
     // pin assignments.  The chip is held in reset.
-    RN42(HardwareSerial * serial, const PinAssignments & pins);
+    RN42(HardwareSerial * serial, const pin_assignments & pins);
 
     // Asserts chip reset to the RN42.  The chip should come up in
     // Data Mode.

@@ -39,7 +39,7 @@ RN42::enter_command_mode(void)
 }
 
 
-RN42::RN42(HardwareSerial * serial_, const PinAssignments & pins) :
+RN42::RN42(HardwareSerial * serial_, const pin_assignments & pins) :
     ser       (serial_),
     reset_pin (pins.reset),
     conn_pin  (pins.conn),
