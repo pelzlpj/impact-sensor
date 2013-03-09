@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#define ARRAY_COUNT(arr) (sizeof(arr)/sizeof(arr[0]))
+
 namespace util {
 
 const uint32_t ADLER32_SEED = 1;

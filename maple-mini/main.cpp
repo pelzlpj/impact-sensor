@@ -3,6 +3,7 @@
 #include "RN42.h"
 #include "util.h"
 #include "serial_util.h"
+#include "Accel.h"
 
 
 using namespace libmaple_util;
@@ -10,6 +11,9 @@ using namespace libmaple_util;
 const uint8_t BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
 const uint8_t BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
 const uint8_t BOARD_USART1_CK_PIN  = 27;
+const uint8_t BOARD_ADC_IN0        = 11;
+const uint8_t BOARD_ADC_IN1        = 10;
+const uint8_t BOARD_ADC_IN2        = 9;
 
 
 // Force init to be called *first*, i.e. before static object allocation.
@@ -132,6 +136,7 @@ int main(void) {
 
     RN42 rn42(&Serial3, rn42_pins);
 
+#if 0
     {
         delay(5000);
         SerialUSB.println("Now entering Fast Data Mode.");
@@ -148,6 +153,38 @@ int main(void) {
     while (true) {
         ctx.state(&ctx);
     }
+#endif
+
+	AccelSampler::PinAssignments accel_pins;
+	accel_pins.adc_x = BOARD_ADC_IN0;
+	accel_pins.adc_y = BOARD_ADC_IN1;
+	accel_pins.adc_z = BOARD_ADC_IN2;
+
+	delay(5000);
+
+	SerialUSB.println("Init accel module");
+	uint16_t buf[10];
+	AccelSampler accel(accel_pins, buf, ARRAY_COUNT(buf));
+	if (!accel.init()) {
+		SerialUSB.println("Error: unable to init accel module.");
+		while (true);
+	}
+	accel.power_up_adc();
+
+	while (true) {
+		SerialUSB.println("Start conversion.");
+		accel.start_adc_conversion();
+		uint16_t val[3];
+		while (!accel.read_sample(val));
+		SerialUSB.println(val[0]);
+		SerialUSB.println(val[1]);
+		SerialUSB.println(val[2]);
+
+		delay(1000);
+		if (accel.read_sample(val)) {
+			SerialUSB.println("error");
+		}
+	}
 
     return 0;
 }
