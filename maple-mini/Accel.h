@@ -20,33 +20,37 @@ namespace ADC_CR2  {
     const uint32_t ADON    = (1UL << 0);
 }
 
-
-class AccelSampler;
-void dma_isr(void);
-
-namespace {
-    AccelSampler * sampler_instance = NULL;
-    volatile bool dma_complete      = false;
-}
-
-
-const size_t NUM_AXES = 3;
-
+const size_t NUM_AXES           = 3;
+const size_t MEDIAN_FILTER_LEN  = 5;
 const uint32_t CALIBRATION_MSEC = 10000;
 
-const size_t MEDIAN_FILTER_LEN = 5;
+// e.g. "5" ==> "collision event occurs 1/5 of the way
+// through the buffer"
+const unsigned int TRIGGER_DIVISIONS = 4;
 
 
 const uint16_t MIN_12BIT  = 0;
 const uint16_t ZERO_12BIT = 2048;
 const uint16_t MAX_12BIT  = 4096;
 
+// Sample at 250us intervals == 4kHz (compare to ~1kHz bandwidth of ADXL377)
+const uint32_t SAMPLE_PERIOD_USEC = 250;
 
 struct calib_range
 {
     uint16_t low;
     uint16_t high;
 };
+
+void dma_isr(void);
+void timer_isr(void);
+
+class AccelSampler;
+
+namespace {
+    AccelSampler * sampler;
+    volatile bool dma_complete = false;
+}
 
 
 template<typename T>
@@ -147,7 +151,33 @@ private:
 
     bool is_initialized;
 
-    friend void dma_isr(void);
+    friend void timer_isr(void);
+
+    void power_up_adc(void)
+    {
+        if (!is_initialized) {
+            return;
+        }
+
+        // ADON transition from 0 to 1 wakes up the ADC from
+        // Power Down mode.  Conversion does not begin until
+        // 1 is written to ADON a second time.
+        ADC1->regs->CR2 = ADC_CR2::DMA | ADC_CR2::ADON;
+        adc_calibrate(ADC1);
+
+        // datasheet requires 1us delay before conversion can begin
+        delay(1);
+    }
+
+    void power_down_adc(void)
+    {
+        if (!is_initialized) {
+            return;
+        }
+
+        // Setting ADON to 0
+        ADC1->regs->CR2 = ADC_CR2::DMA;
+    }
 
     // Prime the DMA engine to carry out transfer of a single sample
     // (three ADC channels)
@@ -164,6 +194,62 @@ private:
         cfg.tube_flags    = DMA_CFG_DST_INC | DMA_CFG_CMPLT_IE;
         cfg.tube_req_src  = DMA_REQ_SRC_ADC1;
         return dma_tube_cfg(DMA1, DMA_CH1, &cfg);
+    }
+
+    void start_adc_conversion(void)
+    {
+        if (!is_initialized) {
+            return;
+        }
+
+        setup_dma();
+        dma_enable(DMA1, DMA_CH1);
+        ADC1->regs->CR2 = ADC_CR2::DMA | ADC_CR2::ADON;
+    }
+
+    void wait_dma_complete(void)
+    {
+        while (!dma_complete);
+        dma_complete = false;
+    }
+
+    // Acquire an ADC sample, causing the dma_buf to be updated.
+    void acquire_sample(void)
+    {
+        start_adc_conversion();
+        wait_dma_complete();
+    }
+
+    void capture_calibration_samples(
+            RingBuffer<uint16_t> ring_buffers[NUM_AXES],
+            calib_range calib_ranges[NUM_AXES])
+    {
+        uint32_t sample_count = 0;
+        const uint32_t start_time = millis();
+        while (millis() - start_time < CALIBRATION_MSEC) {
+            acquire_sample();
+            sample_count++;
+
+            for (size_t j = 0; j < NUM_AXES; j++) {
+                ring_buffers[j].append(dma_buf[j]);
+
+                if (sample_count >= MEDIAN_FILTER_LEN) {
+                    const uint16_t filtered_sample =
+                        median5_filter_latest(ring_buffers[j]);
+                    if (filtered_sample < calib_ranges[j].low) {
+                        calib_ranges[j].low = filtered_sample;
+                    }
+                    if (filtered_sample > calib_ranges[j].high) {
+                        calib_ranges[j].high = filtered_sample;
+                    }
+                }
+            }
+
+            if (sample_count % 5 == 0) {
+                toggleLED();
+            }
+            delay(10);
+        }
     }
 
 public:
@@ -238,95 +324,64 @@ public:
         // Start ADC in Power Down state
         power_down_adc();
 
-        sampler_instance = this;
+        sampler          = this;
         is_initialized   = true;
         return true;
     }
 
-    void power_up_adc(void)
+    // Perform continuous capture until a collision event is detected.
+    // After the collision, 3/4 of a buffer is filled before stopping.
+    void capture_event(void)
     {
-        if (!is_initialized) {
-            return;
-        }
+        SerialUSB.println("capture_event");
+        power_up_adc();
 
-        // ADON transition from 0 to 1 wakes up the ADC from
-        // Power Down mode.  Conversion does not begin until
-        // 1 is written to ADON a second time.
-        ADC1->regs->CR2 = ADC_CR2::DMA | ADC_CR2::ADON;
-        adc_calibrate(ADC1);
+        sample_buf_start = 0;
+        sample_count     = 0;
 
-        // datasheet requires 1us delay before conversion can begin
-        delay(1);
-    }
+        HardwareTimer timer(3);
+        SerialUSB.println("timer pause");
+        timer.pause();
 
-    void power_down_adc(void)
-    {
-        if (!is_initialized) {
-            return;
-        }
+        SerialUSB.println("timer set");
+        // Configure a periodic up-counter
+        timer.setMode(TIMER_CH1, TIMER_OUTPUT_COMPARE);
 
-        // Setting ADON to 0
-        ADC1->regs->CR2 = ADC_CR2::DMA;
-    }
+        SerialUSB.println("timer setPeriod");
+        const uint16_t overflow = timer.setPeriod(SAMPLE_PERIOD_USEC);
 
-    void start_adc_conversion(void)
-    {
-        if (!is_initialized) {
-            return;
-        }
+        SerialUSB.println("timer setCompare");
+        // Interrupt fires once per period, at value 1
+        timer.setCompare(TIMER_CH1, 1);
 
-        setup_dma();
-        dma_enable(DMA1, DMA_CH1);
-        ADC1->regs->CR2 = ADC_CR2::DMA | ADC_CR2::ADON;
-    }
+        SerialUSB.println("timer refresh");
+        timer.refresh();
 
+        SerialUSB.println("timer attachInterrupt");
+        digitalWrite(BOARD_LED_PIN, LOW);
+        timer.attachInterrupt(TIMER_CH1, timer_isr);
 
-    void acquire_raw_sample(uint16_t output[NUM_AXES])
-    {
-        if (!is_initialized) {
-            return;
-        }
-        start_adc_conversion();
-        while (!dma_complete);
-        for (size_t i = 0; i < NUM_AXES; i++) {
-            output[i] = dma_buf[i];
-        }
-        dma_complete = false;
-    }
+        SerialUSB.println("timer get");
+        SerialUSB.println(timer.getPrescaleFactor());
+        SerialUSB.println(timer.getOverflow());
+        SerialUSB.println(timer.getCompare(TIMER_CH1));
+        SerialUSB.println("timer resume");
+        timer.resume();
 
-    void capture_calibration_samples(
-            RingBuffer<uint16_t> ring_buffers[NUM_AXES],
-            calib_range calib_ranges[NUM_AXES])
-    {
         uint32_t sample_count = 0;
-        const uint32_t start_time = millis();
-        while (millis() - start_time < CALIBRATION_MSEC) {
-            uint16_t samples[NUM_AXES];
-            acquire_raw_sample(samples);
+        while (true) {
+            wait_dma_complete();
+
             sample_count++;
-
-            for (size_t j = 0; j < NUM_AXES; j++) {
-                ring_buffers[j].append(samples[j]);
-
-                if (sample_count >= MEDIAN_FILTER_LEN) {
-                    const uint16_t filtered_sample =
-                        median5_filter_latest(ring_buffers[j]);
-                    if (filtered_sample < calib_ranges[j].low) {
-                        calib_ranges[j].low = filtered_sample;
-                    }
-                    if (filtered_sample > calib_ranges[j].high) {
-                        calib_ranges[j].high = filtered_sample;
-                    }
-                }
-            }
-
-            if (sample_count % 5 == 0) {
+            if (sample_count == 2000) {
+                sample_count = 0;
                 toggleLED();
             }
-            delay(10);
         }
-        SerialUSB.println("Samples captured");
+
+        power_down_adc();
     }
+
 
     // Compute the zero points of the accelerometer.
     //
@@ -339,6 +394,8 @@ public:
     // Returns: true if calibration is successful, false otherwise.
     bool calibrate(void)
     {
+        power_up_adc();
+
         SerialUSB.println("Calibrating accelerometer...");
         calib_range calib_ranges[] = {
             {MAX_12BIT, MIN_12BIT},
@@ -370,7 +427,7 @@ public:
 
         if (!calib_ok) {
             SerialUSB.println("Calibration failure.");
-            return false;
+            goto out;
         }
 
         SerialUSB.println("Calibration complete:");
@@ -381,19 +438,41 @@ public:
             SerialUSB.println(zero_points[j]);
         }
 
-        return true;
+    out:
+        power_down_adc(); 
+        return calib_ok;
     }
 };
 
 
 void dma_isr(void)
 {
+    dma_complete = true;
+}
+
+
+void timer_isr(void)
+{
+    digitalWrite(BOARD_LED_PIN, HIGH);
+//    sampler->start_adc_conversion();
+}
+
+
+#if 0
     const size_t ofs =
         (sampler_instance->sample_buf_start + sampler_instance->sample_count) %
         sampler_instance->sample_buf_len;
 
-    // TODO: pythagorean distance
-    sampler_instance->sample_buf[ofs] = sampler_instance->dma_buf[0];
+    // Store magnitude of acceleration vector, measured relative to
+    // accelerometer zero point
+    uint32_t sum = 0;
+    for (size_t i = 0; i < ARRAY_COUNT(sampler_instance->dma_buf); i++) {
+        const int32_t val =
+            static_cast<int32_t>(sampler_instance->dma_buf[i]) -
+            static_cast<int32_t>(sampler_instance->zero_points[i]);
+        sum += val * val;
+    }
+    sampler_instance->sample_buf[ofs] = util::sqrt_uint32(sum);
 
     if (sampler_instance->sample_count < sampler_instance->sample_buf_len) {
         sampler_instance->sample_count++;
@@ -404,7 +483,7 @@ void dma_isr(void)
 
     dma_disable(DMA1, DMA_CH1);
     dma_complete = true;
-}
+#endif
 
 
 #endif  // INCLUDE_GUARD_53da3484_c130_4662_a62e_0a6675871352

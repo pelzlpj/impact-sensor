@@ -16,11 +16,6 @@ const uint8_t BOARD_ADC_IN1        = 10;
 const uint8_t BOARD_ADC_IN2        = 9;
 
 
-// Force init to be called *first*, i.e. before static object allocation.
-// Otherwise, statically allocated objects that need libmaple may fail.
-__attribute__((constructor)) void premain() {
-    init();
-}
 
 
 struct fsm_context
@@ -123,11 +118,19 @@ void state_idle(struct fsm_context * ctx)
 }
 
 
+
+// Force init to be called *first*, i.e. before static object allocation.
+// Otherwise, statically allocated objects that need libmaple may fail.
+__attribute__((constructor)) void premain() {
+    init();
+}
+
 int main(void) {
     using namespace bluetooth;
 
     pinMode(BOARD_LED_PIN, OUTPUT);
 
+#if 0
     RN42::pin_assignments rn42_pins;
     rn42_pins.cts   = BOARD_USART3_RTS_PIN;
     rn42_pins.rts   = BOARD_USART3_CTS_PIN;
@@ -136,7 +139,6 @@ int main(void) {
 
     RN42 rn42(&Serial3, rn42_pins);
 
-#if 0
     {
         delay(5000);
         SerialUSB.println("Now entering Fast Data Mode.");
@@ -155,12 +157,12 @@ int main(void) {
     }
 #endif
 
+    delay(4000);
+
 	AccelSampler::pin_assignments accel_pins;
 	accel_pins.adc_x = BOARD_ADC_IN0;
 	accel_pins.adc_y = BOARD_ADC_IN1;
 	accel_pins.adc_z = BOARD_ADC_IN2;
-
-	delay(5000);
 
 	SerialUSB.println("Init accel module");
 	uint16_t buf[10];
@@ -169,8 +171,11 @@ int main(void) {
 		SerialUSB.println("Error: unable to init accel module.");
 		while (true);
 	}
-	accel.power_up_adc();
     accel.calibrate();
+
+    SerialUSB.println("Capture...");
+    accel.capture_event();
+    SerialUSB.println("done.");
 
     while (true) {
         toggleLED();
