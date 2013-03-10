@@ -77,7 +77,7 @@ RN42::clear_reset(void)
 }
 
 bool
-RN42::enter_fast_data_mode(void)
+RN42::configure_fast_data_mode(void)
 {
     if (!enter_command_mode()) {
         return false;

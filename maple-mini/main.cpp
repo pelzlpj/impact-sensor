@@ -8,115 +8,140 @@
 
 using namespace libmaple_util;
 
-const uint8_t BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
-const uint8_t BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
-const uint8_t BOARD_USART1_CK_PIN  = 27;
-const uint8_t BOARD_ADC_IN0        = 11;
-const uint8_t BOARD_ADC_IN1        = 10;
-const uint8_t BOARD_ADC_IN2        = 9;
+namespace {
 
+    const uint8_t BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
+    const uint8_t BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
+    const uint8_t BOARD_USART1_CK_PIN  = 27;
+    const uint8_t BOARD_ADC_IN0        = 11;
+    const uint8_t BOARD_ADC_IN1        = 10;
+    const uint8_t BOARD_ADC_IN2        = 9;
 
+    uint16_t accel_buf[1000];
 
+    struct fsm_context
+    {
+        // Bluetooth module used to send data to host PC
+        bluetooth::RN42 * const rn42;
 
-struct fsm_context
-{
-    bluetooth::RN42 * const rn42;
-    void (*state)(struct fsm_context *);
-};
+        // Accelerometer module used for data capture
+        AccelSampler * const accel;
 
-void state_reset_connection(struct fsm_context * ctx);
-void state_wait_connection (struct fsm_context * ctx);
-void state_send_data       (struct fsm_context * ctx);
-void state_wait_response   (struct fsm_context * ctx);
-void state_idle            (struct fsm_context * ctx);
+        // Offset into <accel_buf> ring buffer where captured
+        // data begins
+        size_t sample_buf_start;
 
+        // Current FSM state
+        void (*state)(struct fsm_context *);
+    };
 
-void state_reset_connection(struct fsm_context * ctx)
-{
-    SerialUSB.println("Resetting link...");
-    ctx->rn42->reset();
-    ctx->state = state_wait_connection;
-}
+    void state_acquire_data    (struct fsm_context * ctx);
+    void state_reset_connection(struct fsm_context * ctx);
+    void state_wait_connection (struct fsm_context * ctx);
+    void state_send_data       (struct fsm_context * ctx);
+    void state_wait_response   (struct fsm_context * ctx);
 
-
-void state_wait_connection(struct fsm_context * ctx)
-{
-    SerialUSB.println("Waiting for connection...");
-    while (!ctx->rn42->is_connected()) {
-        toggleLED();
-        delay(100);
+    void write_32le(HardwareSerial * const serial, const uint32_t val)
+    {
+        serial->write(static_cast<uint8_t>(val >>  0));
+        serial->write(static_cast<uint8_t>(val >>  8));
+        serial->write(static_cast<uint8_t>(val >> 16));
+        serial->write(static_cast<uint8_t>(val >> 24));
     }
 
-    SerialUSB.println("Waiting for command...");
-    char buf[10];
-    if (read_line(ctx->rn42->serial(), buf, sizeof(buf), 30000) != rl_status::OK) {
-        ctx->state = state_reset_connection;
-        return;
+    void state_acquire_data(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Acquiring data...");
+        ctx->sample_buf_start = ctx->accel->capture_event();
+        ctx->rn42->clear_reset();
+        ctx->state = state_wait_connection;
     }
-    if (std::strcmp(buf, "send") == 0) {
-        ctx->state = state_send_data;
-    } else {
-        SerialUSB.println("Bad command.");
-        ctx->state = state_reset_connection;
+
+    void state_reset_connection(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Resetting link...");
+        ctx->rn42->reset();
+        ctx->state = state_wait_connection;
     }
-}
 
+    void state_wait_connection(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Waiting for connection...");
+        while (!ctx->rn42->is_connected()) {
+            toggleLED();
+            delay(100);
+        }
 
-void state_send_data(struct fsm_context * ctx)
-{
-    SerialUSB.println("Sending data...");
-    const uint32_t byte_count = 100;
-    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >>  0));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >>  8));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >> 16));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(byte_count >> 24));
-
-    uint32_t adler = 1;
-    for (uint8_t i = 0; i < byte_count; i++) {
-        if (!ctx->rn42->is_connected()) {
+        SerialUSB.println("Waiting for command...");
+        char buf[10];
+        if (read_line(ctx->rn42->serial(), buf, sizeof(buf), 30000) != rl_status::OK) {
             ctx->state = state_reset_connection;
             return;
         }
+        if (std::strcmp(buf, "send") == 0) {
+            ctx->state = state_send_data;
+        } else {
+            SerialUSB.println("Bad command.");
+            ctx->state = state_reset_connection;
+        }
+    }
+
+    void state_send_data(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Sending data...");
+        const uint32_t byte_count = sizeof(accel_buf);
+        write_32le(ctx->rn42->serial(), byte_count);
+
+        uint32_t adler = 1;
+        for (uint32_t i = 0; i < ARRAY_COUNT(accel_buf); i++) {
+            if (!ctx->rn42->is_connected()) {
+                ctx->state = state_reset_connection;
+                return;
+            }
+            toggleLED();
+            const size_t ofs   = (ctx->sample_buf_start + i) % ARRAY_COUNT(accel_buf);
+            const uint16_t val = accel_buf[ofs];
+            const uint8_t lo   = val >> 0;
+            const uint8_t hi   = val >> 8;
+
+            ctx->rn42->serial()->write(lo);
+            adler = util::adler32(&lo, sizeof(lo), adler);
+
+            ctx->rn42->serial()->write(hi);
+            adler = util::adler32(&hi, sizeof(hi), adler);
+        }
+
+        write_32le(ctx->rn42->serial(), adler);
+        ctx->state = state_wait_response;
+    }
+
+    void state_wait_response(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Waiting for response...");
+        char buf[10];
+        if (!ctx->rn42->is_connected() ||
+                read_line(ctx->rn42->serial(), buf, sizeof(buf), 5000) != rl_status::OK) {
+            ctx->state = state_reset_connection;
+            return;
+        }
+        if (std::strcmp(buf, "send") == 0) {
+            SerialUSB.println("Retransmit requested.");
+            ctx->state = state_send_data;
+        } else if (std::strcmp(buf, "ack") == 0) {
+            SerialUSB.println("Payload acknowledged.");
+            ctx->rn42->assert_reset();
+            ctx->state = state_acquire_data;
+        }
+    }
+
+    void state_idle(struct fsm_context * ctx)
+    {
+        SerialUSB.println("Idling.");
         toggleLED();
-        ctx->rn42->serial()->write(i);
-        adler = util::adler32(&i, sizeof(i), adler);
+        delay(500);
     }
 
-    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >>  0));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >>  8));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >> 16));
-    ctx->rn42->serial()->write(static_cast<uint8_t>(adler >> 24));
-
-    ctx->state = state_wait_response;
-}
-
-
-void state_wait_response(struct fsm_context * ctx)
-{
-    SerialUSB.println("Waiting for response...");
-    char buf[10];
-    if (!ctx->rn42->is_connected() ||
-            read_line(ctx->rn42->serial(), buf, sizeof(buf), 5000) != rl_status::OK) {
-        ctx->state = state_reset_connection;
-        return;
-    }
-    if (std::strcmp(buf, "send") == 0) {
-        SerialUSB.println("Retransmit requested.");
-        ctx->state = state_send_data;
-    } else if (std::strcmp(buf, "ack") == 0) {
-        SerialUSB.println("Payload acknowledged.");
-        ctx->state = state_idle;
-    }
-}
-
-
-void state_idle(struct fsm_context * ctx)
-{
-    SerialUSB.println("Idling.");
-    toggleLED();
-    delay(500);
-}
-
+}   // end anonymous namespace
 
 
 // Force init to be called *first*, i.e. before static object allocation.
@@ -125,57 +150,46 @@ __attribute__((constructor)) void premain() {
     init();
 }
 
+
 int main(void) {
     using namespace bluetooth;
 
     pinMode(BOARD_LED_PIN, OUTPUT);
 
-#if 0
+    SerialUSB.println("RN42 init...");
     RN42::pin_assignments rn42_pins;
     rn42_pins.cts   = BOARD_USART3_RTS_PIN;
     rn42_pins.rts   = BOARD_USART3_CTS_PIN;
     rn42_pins.reset = BOARD_SPI2_MOSI_PIN;
     rn42_pins.conn  = BOARD_USART1_CK_PIN;
-
     RN42 rn42(&Serial3, rn42_pins);
-
-    {
-        delay(5000);
-        SerialUSB.println("Now entering Fast Data Mode.");
-        const bool st = rn42.enter_fast_data_mode();
-        SerialUSB.print("Fast Data Mode status: ");
-        SerialUSB.println(st ? "ok" : "failed");
+    if (!rn42.configure_fast_data_mode()) {
+        SerialUSB.println("Warning: unable to configure RN42 fast data mode.");
     }
+    // Start out with RN42 in lower-power mode
+    rn42.assert_reset();
+
+    SerialUSB.println("Accelerometer/ADC init...");
+    AccelSampler::pin_assignments accel_pins;
+	accel_pins.adc_x = BOARD_ADC_IN0;
+	accel_pins.adc_y = BOARD_ADC_IN1;
+	accel_pins.adc_z = BOARD_ADC_IN2;
+    AccelSampler accel(accel_pins, accel_buf, ARRAY_COUNT(accel_buf));
+    if (!accel.init()) {
+		SerialUSB.println("Error: unable to init accel module.");
+		while (true);
+    }
+    accel.calibrate();
 
     struct fsm_context ctx = {
         &rn42,
-        state_wait_connection
+        &accel,
+        0,
+        state_acquire_data
     };
 
     while (true) {
         ctx.state(&ctx);
-    }
-#endif
-
-    delay(4000);
-
-	AccelSampler::pin_assignments accel_pins;
-	accel_pins.adc_x = BOARD_ADC_IN0;
-	accel_pins.adc_y = BOARD_ADC_IN1;
-	accel_pins.adc_z = BOARD_ADC_IN2;
-
-	SerialUSB.println("Init accel module");
-	uint16_t buf[10];
-	AccelSampler accel(accel_pins, buf, ARRAY_COUNT(buf));
-	if (!accel.init()) {
-		SerialUSB.println("Error: unable to init accel module.");
-		while (true);
-	}
-    accel.calibrate();
-
-    while (true) {
-        SerialUSB.println("Capture...");
-        SerialUSB.println(accel.capture_event());
     }
 
     return 0;

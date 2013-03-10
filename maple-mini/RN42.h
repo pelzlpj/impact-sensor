@@ -47,7 +47,7 @@ public:
     void clear_reset(void);
 
     // Force the RN42 to enter Fast Data Mode as soon as a connection is
-    // available.
+    // available.  It is recommended to call this once at power-on.
     //
     // By default, the RN42 has a 60-second configuration window in which it will
     // snoop the data stream (in both directions) for an escape sequence which
@@ -57,7 +57,7 @@ public:
     // port as long as there is no connection.
     //
     // Returns: true if successful, false otherwise.
-    bool enter_fast_data_mode(void);
+    bool configure_fast_data_mode(void);
 
     // Returns: RN42 connection state
     bool is_connected(void);
