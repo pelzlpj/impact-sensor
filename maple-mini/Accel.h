@@ -2,11 +2,17 @@
 #define INCLUDE_GUARD_53da3484_c130_4662_a62e_0a6675871352
 
 
-#include <algorithm>
 #include <stdint.h>
+#include <algorithm>
+#include <limits>
 #include <wirish/wirish.h>
 #include <libmaple/adc.h>
 #include <libmaple/dma.h>
+
+// Shame on you, libmaple...
+#undef min
+#undef max
+
 #include "util.h"
 
 namespace ADC_CR1 {
@@ -28,13 +34,16 @@ const uint32_t CALIBRATION_MSEC = 10000;
 // through the buffer"
 const unsigned int TRIGGER_DIVISIONS = 4;
 
-
 const uint16_t MIN_12BIT  = 0;
 const uint16_t ZERO_12BIT = 2048;
 const uint16_t MAX_12BIT  = 4096;
 
 // Sample at 250us intervals == 4kHz (compare to ~1kHz bandwidth of ADXL377)
-const uint32_t SAMPLE_PERIOD_USEC = 250;
+const uint32_t SAMPLE_PERIOD_USEC   = 250;
+const uint32_t TOGGLE_LED_ISR_COUNT = 500000 / SAMPLE_PERIOD_USEC;
+
+const uint16_t COLLISION_ACCEL_THRESHOLD = 200;
+
 
 struct calib_range
 {
@@ -49,7 +58,8 @@ class AccelSampler;
 
 namespace {
     AccelSampler * sampler;
-    volatile bool dma_complete = false;
+    volatile bool dma_complete  = false;
+    volatile uint32_t isr_count = 0;
 }
 
 
@@ -131,6 +141,9 @@ public:
 private:
     const pin_assignments pins;
 
+    // Trigger for ADC sampling interrupts
+    HardwareTimer timer;
+
     // Buffer where sample data is stored (one 16-bit word per
     // sample, representing magnitude of acceleration vector)
     uint16_t * const sample_buf;
@@ -139,8 +152,13 @@ private:
     // sample_buf is used as a circular buffer, so we need to
     // keep track of an offset as well as the number of elements
     // stored.
-    size_t sample_buf_start;
+    size_t next_sample_ofs;
     size_t sample_count;
+
+    // running count of post-trigger samples, or UINT32_MAX if
+    // no collision has been detected
+    uint32_t samples_after_trigger;
+    const uint32_t max_samples_after_trigger;
 
     // DMA engine moves one sample's worth of data (x, y, z) into
     // this buffer
@@ -149,16 +167,13 @@ private:
     // Zero points recorded during calibration process
     uint16_t zero_points[NUM_AXES];
 
+    // True if init() was invoked successfully
     bool is_initialized;
 
     friend void timer_isr(void);
 
     void power_up_adc(void)
     {
-        if (!is_initialized) {
-            return;
-        }
-
         // ADON transition from 0 to 1 wakes up the ADC from
         // Power Down mode.  Conversion does not begin until
         // 1 is written to ADON a second time.
@@ -171,10 +186,6 @@ private:
 
     void power_down_adc(void)
     {
-        if (!is_initialized) {
-            return;
-        }
-
         // Setting ADON to 0
         ADC1->regs->CR2 = ADC_CR2::DMA;
     }
@@ -198,10 +209,6 @@ private:
 
     void start_adc_conversion(void)
     {
-        if (!is_initialized) {
-            return;
-        }
-
         setup_dma();
         dma_enable(DMA1, DMA_CH1);
         ADC1->regs->CR2 = ADC_CR2::DMA | ADC_CR2::ADON;
@@ -213,8 +220,8 @@ private:
         dma_complete = false;
     }
 
-    // Acquire an ADC sample, causing the dma_buf to be updated.
-    void acquire_sample(void)
+    // Acquire an ADC sample synchronously, causing the dma_buf to be updated.
+    void acquire_sample_sync(void)
     {
         start_adc_conversion();
         wait_dma_complete();
@@ -227,7 +234,7 @@ private:
         uint32_t sample_count = 0;
         const uint32_t start_time = millis();
         while (millis() - start_time < CALIBRATION_MSEC) {
-            acquire_sample();
+            acquire_sample_sync();
             sample_count++;
 
             for (size_t j = 0; j < NUM_AXES; j++) {
@@ -252,17 +259,64 @@ private:
         }
     }
 
+    // Process a sample sitting in <dma_buf>.
+    //
+    // Returns: true if sampling should continue, false if sampling should cease
+    //          because a collision event has been recorded
+    bool process_sample(void)
+    {
+        // Store magnitude of acceleration vector, measured relative to
+        // accelerometer zero point.  While I haven't counted cycles, the
+        // expectation is that the for loop will finish executing well in
+        // advance of the next timer interrupt; high-frequency sampling
+        // would need to double-buffer.
+        uint32_t sum_sq = 0;
+        for (size_t i = 0; i < ARRAY_COUNT(dma_buf); i++) {
+            const int32_t val =
+                static_cast<int32_t>(dma_buf[i]) -
+                static_cast<int32_t>(zero_points[i]);
+            sum_sq += val * val;
+        }
+        sample_buf[next_sample_ofs] = util::sqrt_uint32(sum_sq);
+
+        if (samples_after_trigger == std::numeric_limits<uint32_t>::max()) {
+           if (sample_count == sample_buf_len &&
+                   sample_buf[next_sample_ofs] > COLLISION_ACCEL_THRESHOLD) {
+               samples_after_trigger = 0;
+           }
+        } else {
+            samples_after_trigger++;
+            if (samples_after_trigger == max_samples_after_trigger) {
+                return false;
+            }
+        }
+
+        next_sample_ofs++;
+        if (sample_count < sample_buf_len) {
+            sample_count++;
+        }
+        if (next_sample_ofs == sample_buf_len) {
+            next_sample_ofs = 0;
+        }
+
+        return true;
+    }
+
+
 public:
     // Construct a new AccelSampler instance associated with the specified
     // Maple Mini pins.  Samples will be stored in the buffer provided by the caller.
     // The caller must invoke init() to complete the construction process.
     AccelSampler(const pin_assignments & pins_, uint16_t * buf, size_t buf_len) :
-        pins             (pins_),
-        sample_buf       (buf),
-        sample_buf_len   (buf_len),
-        sample_buf_start (0),
-        sample_count     (0),
-        is_initialized   (false)
+        pins                      (pins_),
+        timer                     (2),   // General-purpose timer, no need for advanced timer
+        sample_buf                (buf),
+        sample_buf_len            (buf_len),
+        next_sample_ofs           (0),
+        sample_count              (0),
+        samples_after_trigger     (std::numeric_limits<uint32_t>::max()),
+        max_samples_after_trigger (buf_len * (TRIGGER_DIVISIONS - 1) / TRIGGER_DIVISIONS),
+        is_initialized            (false)
     {
         for (size_t i = 0; i < ARRAY_COUNT(zero_points); i++) {
             zero_points[i] = ZERO_12BIT;
@@ -324,62 +378,46 @@ public:
         // Start ADC in Power Down state
         power_down_adc();
 
-        sampler          = this;
-        is_initialized   = true;
+        sampler        = this;
+        is_initialized = true;
         return true;
     }
 
     // Perform continuous capture until a collision event is detected.
     // After the collision, 3/4 of a buffer is filled before stopping.
-    void capture_event(void)
+    //
+    // Returns: offset into circular buffer where capture event recording
+    //          begins
+    size_t capture_event(void)
     {
-        SerialUSB.println("capture_event");
-        power_up_adc();
-
-        sample_buf_start = 0;
-        sample_count     = 0;
-
-        HardwareTimer timer(3);
-        SerialUSB.println("timer pause");
-        timer.pause();
-
-        SerialUSB.println("timer set");
-        // Configure a periodic up-counter
-        timer.setMode(TIMER_CH1, TIMER_OUTPUT_COMPARE);
-
-        SerialUSB.println("timer setPeriod");
-        const uint16_t overflow = timer.setPeriod(SAMPLE_PERIOD_USEC);
-
-        SerialUSB.println("timer setCompare");
-        // Interrupt fires once per period, at value 1
-        timer.setCompare(TIMER_CH1, 1);
-
-        SerialUSB.println("timer refresh");
-        timer.refresh();
-
-        SerialUSB.println("timer attachInterrupt");
-        digitalWrite(BOARD_LED_PIN, LOW);
-        timer.attachInterrupt(TIMER_CH1, timer_isr);
-
-        SerialUSB.println("timer get");
-        SerialUSB.println(timer.getPrescaleFactor());
-        SerialUSB.println(timer.getOverflow());
-        SerialUSB.println(timer.getCompare(TIMER_CH1));
-        SerialUSB.println("timer resume");
-        timer.resume();
-
-        uint32_t sample_count = 0;
-        while (true) {
-            wait_dma_complete();
-
-            sample_count++;
-            if (sample_count == 2000) {
-                sample_count = 0;
-                toggleLED();
-            }
+        if (!is_initialized) {
+            return 0;
         }
 
+        power_up_adc();
+
+        next_sample_ofs       = 0;
+        sample_count          = 0;
+        samples_after_trigger = std::numeric_limits<uint32_t>::max();
+
+        // Configure a periodic up-counter with an interrupt
+        // that fires once per period, at counter value 1
+        timer.pause();
+        timer.setMode(TIMER_CH1, TIMER_OUTPUT_COMPARE);
+        timer.setPeriod(SAMPLE_PERIOD_USEC);
+        timer.setCompare(TIMER_CH1, 1);
+        timer.refresh();
+        timer.attachInterrupt(TIMER_CH1, timer_isr);
+        timer.resume();
+
+        do {
+            wait_dma_complete();
+        } while (process_sample());
+        timer.detachInterrupt(TIMER_CH1);
+
         power_down_adc();
+
+        return next_sample_ofs;
     }
 
 
@@ -394,6 +432,10 @@ public:
     // Returns: true if calibration is successful, false otherwise.
     bool calibrate(void)
     {
+        if (!is_initialized) {
+            return false;
+        }
+
         power_up_adc();
 
         SerialUSB.println("Calibrating accelerometer...");
@@ -447,43 +489,21 @@ public:
 
 void dma_isr(void)
 {
+    dma_disable(DMA1, DMA_CH1);
     dma_complete = true;
 }
 
 
 void timer_isr(void)
 {
-    digitalWrite(BOARD_LED_PIN, HIGH);
-//    sampler->start_adc_conversion();
+    sampler->start_adc_conversion();
+
+    isr_count++;
+    if (isr_count == TOGGLE_LED_ISR_COUNT) {
+        isr_count = 0;
+        toggleLED();
+    }
 }
-
-
-#if 0
-    const size_t ofs =
-        (sampler_instance->sample_buf_start + sampler_instance->sample_count) %
-        sampler_instance->sample_buf_len;
-
-    // Store magnitude of acceleration vector, measured relative to
-    // accelerometer zero point
-    uint32_t sum = 0;
-    for (size_t i = 0; i < ARRAY_COUNT(sampler_instance->dma_buf); i++) {
-        const int32_t val =
-            static_cast<int32_t>(sampler_instance->dma_buf[i]) -
-            static_cast<int32_t>(sampler_instance->zero_points[i]);
-        sum += val * val;
-    }
-    sampler_instance->sample_buf[ofs] = util::sqrt_uint32(sum);
-
-    if (sampler_instance->sample_count < sampler_instance->sample_buf_len) {
-        sampler_instance->sample_count++;
-    } else {
-        sampler_instance->sample_buf_start =
-            (sampler_instance->sample_buf_start + 1) % sampler_instance->sample_count;
-    }
-
-    dma_disable(DMA1, DMA_CH1);
-    dma_complete = true;
-#endif
 
 
 #endif  // INCLUDE_GUARD_53da3484_c130_4662_a62e_0a6675871352

@@ -173,13 +173,9 @@ int main(void) {
 	}
     accel.calibrate();
 
-    SerialUSB.println("Capture...");
-    accel.capture_event();
-    SerialUSB.println("done.");
-
     while (true) {
-        toggleLED();
-        delay(1000);
+        SerialUSB.println("Capture...");
+        SerialUSB.println(accel.capture_event());
     }
 
     return 0;
