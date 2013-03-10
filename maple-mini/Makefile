@@ -75,7 +75,8 @@ $(LIBMAPLE_REPO)/build/libmaple.a:
 	$(MAKE) -C $(LIBMAPLE_REPO) library
 
 $(BUILD_PATH)/$(BOARD).elf: $(BUILDDIRS) $(TGT_BIN) $(ACCEL_OBJ) $(LIBMAPLE_REPO)/build/libmaple.a
-	$(SILENT_LD) $(CXX) $(LDFLAGS) -o $@ $(TGT_BIN) $(ACCEL_OBJ) $(LIBMAPLE_REPO)/build/libmaple.a \
+	$(SILENT_LD) $(CXX) $(LDFLAGS) -o $@ $(TGT_BIN) $(ACCEL_OBJ) \
+		-Wl,--whole-archive $(LIBMAPLE_REPO)/build/libmaple.a -Wl,--no-whole-archive \
 	   	-Wl,-Map,$(BUILD_PATH)/$(BOARD).map
 
 $(BUILD_PATH)/$(BOARD).bin: $(BUILD_PATH)/$(BOARD).elf
