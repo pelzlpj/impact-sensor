@@ -20,6 +20,37 @@ Directory *view* contains Python code for downloading accelerometer data to a Li
 bluetooth link.
 
 
+POOR MAN'S SCHEMATIC
+====================
+I'm too lazy to draw up a schematic for this, but here are the connections.  Maple Mini pin numbers
+are the numbers written on the PCB, not the standard pin numbers associated with the for the 40-pin
+package.
+
+Maple Mini Power:
+-----------------
+* Batteries hooked up between VIN and GND pins, in range 3.3V to 12V.
+
+Maple Mini to RN42XV:
+---------------------
+* MM pin VCC to RN pin 1 (VDD\_3V3)
+* MM pin GND to RN pin 10 (GND)
+* MM pin 0 (USART3\_RX) to RN pin 2 (TXD)
+* MM pin 1 (USART3\_TX) to RN pin 3 (RXD)
+* MM pin 30 (SPI2\_SCK/USART3\_CTS) to RN pin 12 (RTS)
+* MM pin 29 (SPI2\_MISO/USART3\_RTS) to RN pin 16 (CTS)
+* MM pin 28 (SPI2\_MOSI) to RN pin 5 (RESET\_N)
+* MM pin 27 (PWM/USART1\_CK) to RN pin 13 (GPIO2, connection status)
+
+Maple Mini to ADXL377 evaluation board:
+---------------------------------------
+* MM pin AV+ to ADXL pin 2 (VS)
+* MM pin AV- to ADXL pin 6 (GND)
+* MM pin 11 (ADC\_IN0) to ADXL pin 3 (X\_OUT)
+* MM pin 10 (ADC\_IN1) to ADXL pin 4 (Y\_OUT)
+* MM pin 9  (ADC\_IN2) to ADXL pin 5 (Z\_OUT)
+
+
+
 LICENSE
 =======
 Copyright (c) 2013 Paul Pelzl  
