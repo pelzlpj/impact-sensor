@@ -17,7 +17,7 @@ namespace {
     const uint8_t BOARD_ADC_IN1        = 10;
     const uint8_t BOARD_ADC_IN2        = 9;
 
-    uint16_t accel_buf[1000];
+    uint16_t accel_buf[5000];
 
     struct fsm_context
     {

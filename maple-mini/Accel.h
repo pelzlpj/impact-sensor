@@ -38,8 +38,8 @@ const uint16_t MIN_12BIT  = 0;
 const uint16_t ZERO_12BIT = 2048;
 const uint16_t MAX_12BIT  = 4096;
 
-// Sample at 250us intervals == 4kHz (compare to ~1kHz bandwidth of ADXL377)
-const uint32_t SAMPLE_PERIOD_USEC   = 250;
+// Sample at 250us intervals == 8kHz (compare to ~1kHz bandwidth of ADXL377)
+const uint32_t SAMPLE_PERIOD_USEC   = 125;
 const uint32_t TOGGLE_LED_ISR_COUNT = 500000 / SAMPLE_PERIOD_USEC;
 
 const uint16_t COLLISION_ACCEL_THRESHOLD = 200;
