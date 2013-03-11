@@ -15,6 +15,8 @@ import time
 import tty
 from zlib import adler32
 
+import pylab
+
 DOWNLOAD_IDLE_SEC = 0.1
 
 
@@ -226,8 +228,6 @@ class DataDownloader(object):
         (byte_count,) = struct.unpack('<L', self._read_exact(fd, 4))
         print('download payload, %u bytes' % byte_count)
         payload = self._read_exact(fd, byte_count)
-        for c in payload:
-            print(ord(c))
         print('download checksum')
         try:
             (checksum,) = struct.unpack('<L', self._read_exact(fd, 4))
@@ -241,6 +241,22 @@ class DataDownloader(object):
         os.write(fd, 'ack\r\n')
 
 
+def decode_payload(payload):
+    """Decode a payload byte sequence as a list of 16-bit unsigned integers.
+
+    Returns: list of int
+
+    Raises: ValueError, if the payload has odd length
+    """
+    if len(payload) % 2 != 0:
+        raise ValueError('Payload length is not even.')
+    result = []
+    for i in xrange(0, len(payload), 2):
+        (word,) = struct.unpack('<H', payload[i:i+2])
+        result.append(word)
+    return result
+
+
 if __name__ == '__main__':
     conn = RN42ConnectionManager('hci0')
     try:
@@ -250,6 +266,10 @@ if __name__ == '__main__':
                 payload = downloader.get_payload()
                 if payload is not None:
                     print('New payload of size %u bytes.' % len(payload))
+                    y = decode_payload(payload)
+                    x = range(len(y))
+                    pylab.plot(x, y)
+                    pylab.show()
                 time.sleep(0.1)
         finally:
             downloader.terminate()
