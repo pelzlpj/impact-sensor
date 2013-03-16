@@ -1,4 +1,11 @@
-
+/******************************************************************************
+ * util
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Utliity functions that don't fit elsewhere.
+ ******************************************************************************/
 #ifndef INCLUDE_GUARD_6dce317f_d4b2_4df3_b055_969edfb2edc0
 #define INCLUDE_GUARD_6dce317f_d4b2_4df3_b055_969edfb2edc0
 
@@ -15,10 +22,9 @@ const uint32_t ADLER32_SEED = 1;
 uint32_t
 adler32(const uint8_t * data, size_t data_len, uint32_t seed = ADLER32_SEED);
 
-// Integer square root via bisection search.
+// Integer square root.
 uint32_t
 sqrt_uint32(const uint32_t val);
-
 
 }
 

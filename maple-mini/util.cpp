@@ -1,3 +1,11 @@
+/******************************************************************************
+ * util
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Utliity functions that don't fit elsewhere.
+ ******************************************************************************/
 
 #include "util.h"
 
@@ -18,6 +26,7 @@ adler32(const uint8_t * const data, const size_t data_len, const uint32_t seed)
 
     return (s2 << 16) + s1;
 }
+
 
 // Integer square root via bisection search.
 uint32_t

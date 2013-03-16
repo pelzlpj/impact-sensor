@@ -1,3 +1,14 @@
+/******************************************************************************
+ * toplevel module
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Implements a state machine which ping-pongs between (1) collecting
+ * accelerometer data until a collision event is detected and (2)
+ * transmitting the data to a host PC.
+ ******************************************************************************/
+
 #include <cstring>
 #include "AccelSampler.h"
 #include <wirish/wirish.h>
@@ -10,13 +21,19 @@ using namespace libmaple_util;
 
 namespace {
 
+    // Used for RN42 connections
     const uint8_t BOARD_USART3_RTS_PIN = BOARD_SPI2_MISO_PIN;
     const uint8_t BOARD_USART3_CTS_PIN = BOARD_SPI2_SCK_PIN;
     const uint8_t BOARD_USART1_CK_PIN  = 27;
+
+    // Used for accelerometer axes
     const uint8_t BOARD_ADC_IN0        = 11;
     const uint8_t BOARD_ADC_IN1        = 10;
     const uint8_t BOARD_ADC_IN2        = 9;
 
+    // Accelerometer storage goes here.  Libmaple data structures
+    // take up enough space that this buffer can't be increased
+    // much without smashing the stack.
     uint16_t accel_buf[5000];
 
     struct fsm_context
@@ -86,6 +103,11 @@ namespace {
         }
     }
 
+    // Payloads sent to the remote listener look like:
+    // 1) uint32 payload byte count, encoded as little-endian
+    // 2) payload bytes
+    // 3) uint32 Adler-32 checksum of the payload, encoded
+    //    as little-endian
     void state_send_data(struct fsm_context * ctx)
     {
         SerialUSB.println("Sending data...");
@@ -115,6 +137,13 @@ namespace {
         ctx->state = state_wait_response;
     }
 
+    // Valid responses from the remote listener are:
+    //
+    // 1) "ack"  --> payload received OK, go back to data acquisition
+    // 2) "send" --> error receiving payload, send it again
+    //
+    // If anything else happens, reset the connection and wait for
+    // the remote listener to try again.
     void state_wait_response(struct fsm_context * ctx)
     {
         SerialUSB.println("Waiting for response...");
@@ -132,13 +161,6 @@ namespace {
             ctx->rn42->assert_reset();
             ctx->state = state_acquire_data;
         }
-    }
-
-    void state_idle(struct fsm_context * ctx)
-    {
-        SerialUSB.println("Idling.");
-        toggleLED();
-        delay(500);
     }
 
 }   // end anonymous namespace

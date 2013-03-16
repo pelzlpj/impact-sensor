@@ -1,4 +1,11 @@
-
+/******************************************************************************
+ * serial_util
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Extra functionality for working with libmaple serial ports.
+ ******************************************************************************/
 #ifndef INCLUDE_GUARD_d16eb6f8_a620_43a3_ad40_a0096752d705
 #define INCLUDE_GUARD_d16eb6f8_a620_43a3_ad40_a0096752d705
 

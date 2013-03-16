@@ -89,6 +89,7 @@ namespace detail {
     }
 }
 
+
 // Wrapper for accessing an array as a circular buffer.  (Turned out to be
 // overkill for this project... extensive filtering turned out to be unnecessary
 // due to the unexpectedly low-noise characteristics of the accelerometer and ADC.)
@@ -170,12 +171,14 @@ AccelSampler::power_up_adc(void)
     delay(1);
 }
 
+
 void
 AccelSampler::power_down_adc(void)
 {
     // Setting ADON to 0
     ADC1->regs->CR2 = ADC_CR2::DMA;
 }
+
 
 // Prime the DMA engine to carry out transfer of a single sample
 // (three ADC channels)
@@ -195,6 +198,7 @@ AccelSampler::setup_dma(void)
     return dma_tube_cfg(DMA1, DMA_CH1, &cfg);
 }
 
+
 void
 AccelSampler::start_adc_conversion(void)
 {
@@ -210,6 +214,7 @@ AccelSampler::wait_dma_complete(void)
     dma_complete = false;
 }
 
+
 // Acquire an ADC sample synchronously, causing the dma_buf to be updated.
 void
 AccelSampler::acquire_sample_sync(void)
@@ -217,6 +222,7 @@ AccelSampler::acquire_sample_sync(void)
     start_adc_conversion();
     wait_dma_complete();
 }
+
 
 void
 AccelSampler::capture_calibration_samples(
@@ -250,6 +256,7 @@ AccelSampler::capture_calibration_samples(
         delay(10);
     }
 }
+
 
 // Process a sample sitting in <dma_buf>.
 //
@@ -296,9 +303,6 @@ AccelSampler::process_sample(void)
 }
 
 
-// Construct a new AccelSampler instance associated with the specified
-// Maple Mini pins.  Samples will be stored in the buffer provided by the caller.
-// The caller must invoke init() to complete the construction process.
 AccelSampler::AccelSampler(const pin_assignments & pins_, uint16_t * buf, size_t buf_len) :
     pins                      (pins_),
     timer                     (2),   // General-purpose timer, no need for advanced timer
@@ -378,11 +382,6 @@ AccelSampler::init(void)
 }
 
 
-// Perform continuous capture until a collision event is detected.
-// After the collision, 3/4 of a buffer is filled before stopping.
-//
-// Returns: offset into circular buffer where capture event recording
-//          begins
 size_t
 AccelSampler::capture_event(void)
 {
@@ -417,15 +416,6 @@ AccelSampler::capture_event(void)
 }
 
 
-// Compute the zero points of the accelerometer.
-//
-// The user should slowly roll the accelerometer through all values of all
-// three axes.  The zero points are determined by (1) using a median filter
-// to compute a min and max acceleration on each axis (due to acceleration
-// of gravity) and then (2) averaging the min and max to get an approximate
-// zero point.
-//
-// Returns: true if calibration is successful, false otherwise.
 bool
 AccelSampler::calibrate(void)
 {

@@ -1,3 +1,11 @@
+/******************************************************************************
+ * serial_util
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Extra functionality for working with libmaple serial ports.
+ ******************************************************************************/
 
 #include <wirish/wirish.h>
 #include <libmaple/usart.h>
