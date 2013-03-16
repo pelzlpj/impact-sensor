@@ -4,7 +4,7 @@
  * Copyright (C) 2013 Paul Pelzl
  * Simplified BSD license.  See README.md for details.
  *
- * Utliity functions that don't fit elsewhere.
+ * Utility functions that don't fit elsewhere.
  ******************************************************************************/
 
 #include "util.h"
