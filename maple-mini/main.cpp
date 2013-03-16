@@ -105,7 +105,7 @@ namespace {
 
     // Payloads sent to the remote listener look like:
     // 1) uint32 payload byte count, encoded as little-endian
-    // 2) payload bytes
+    // 2) sequence of 16-bit samples, encoded as little-endian
     // 3) uint32 Adler-32 checksum of the payload, encoded
     //    as little-endian
     void state_send_data(struct fsm_context * ctx)
