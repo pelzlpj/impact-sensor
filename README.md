@@ -10,7 +10,7 @@ collision event.  The hardware is composed of:
 
 3.  A Roving Networks [RN42](http://www.rovingnetworks.com/products/RN42) bluetooth module,
     wired to USART3 on the STM32 and used for transmitting accelerometer data for display on a
-    remote workstation.
+    remote workstation
 
 Directory *maple-mini* contains firmware for the STM32.
 The [libmaple repository](https://github.com/leaflabs/maplemini) must be checked out as a
@@ -28,7 +28,7 @@ package.
 
 Maple Mini Power:
 -----------------
-* Batteries hooked up between VIN and GND pins, in range 3.3V to 12V.
+* Batteries hooked up between VIN and GND pins, in range 3.3V to 12V
 
 Maple Mini to RN42XV:
 ---------------------
@@ -49,7 +49,11 @@ Maple Mini to ADXL377 evaluation board:
 * MM pin 10 (ADC\_IN1) to ADXL pin 4 (Y\_OUT)
 * MM pin 9  (ADC\_IN2) to ADXL pin 5 (Z\_OUT)
 
-
+ADDITIONAL HARDWARE NOTES
+=========================
+Plan for about 80mA peak current draw (which happens when the RN42 is turned on).  I used a 160mAh
+lithium polymer battery; this works well due to the high discharge rate, very small volume, and
+nearly ideal voltage (3.7V is a good match to the 3.3V LDO regulator provided on the Maple Mini).
 
 LICENSE
 =======
