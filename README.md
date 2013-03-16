@@ -23,7 +23,7 @@ bluetooth link.
 POOR MAN'S SCHEMATIC
 ====================
 I'm too lazy to draw up a schematic for this, but here are the connections.  Maple Mini pin numbers
-are the numbers written on the PCB, not the standard pin numbers associated with the for the 40-pin
+are the numbers written on the PCB, not the standard pin numbers associated with the 40-pin
 package.
 
 Maple Mini Power:
