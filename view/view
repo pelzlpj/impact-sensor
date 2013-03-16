@@ -72,10 +72,10 @@ class UnexpectedEof(Exception):
         self.partial_read = partial_read
 
 
-class RN42ConnectionManager(object):
+class RN42DeviceManager(object):
 
     def __init__(self, host_device):
-        """Initiate a connection from the host device (e.g. 'hci0') to the first
+        """Bind an rfcomm device from the host device (e.g. 'hci0') to the first
         detected Roving Networks bluetooth device.
         """
         self._host_dev   = host_device
@@ -136,11 +136,11 @@ class RN42ConnectionManager(object):
 
 class DataDownloader(object):
 
-    def __init__(self, connection_manager):
-        """Use the given connection manager to retrieve data payloads
-        from an RN42-equipped device.
+    def __init__(self, device_manager):
+        """Use the given device manager to retrieve data payloads from an
+        RN42-equipped device.
         """
-        self._conn = connection_manager
+        self._dev_man = device_manager
 
         self._lock           = threading.Lock()
         self._exit_requested = False    # guarded by _lock
@@ -173,7 +173,7 @@ class DataDownloader(object):
                     return
                 payload_consumed = self._payload is None
             if payload_consumed:
-                dev = self._conn.get_rfcomm_device()
+                dev = self._dev_man.get_rfcomm_device()
                 if dev:
                     try:
                         fd = os.open(dev, os.O_RDWR)
@@ -288,8 +288,8 @@ def make_plot(samples):
 
 
 if __name__ == '__main__':
-    with contextlib.closing(RN42ConnectionManager('hci0')) as conn:
-        with contextlib.closing(DataDownloader(conn)) as downloader:
+    with contextlib.closing(RN42DeviceManager('hci0')) as dev_man:
+        with contextlib.closing(DataDownloader(dev_man)) as downloader:
             while True:
                 payload = downloader.get_payload()
                 if payload is not None:
