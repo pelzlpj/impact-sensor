@@ -193,13 +193,13 @@ int main(void) {
 
     SerialUSB.println("Accelerometer/ADC init...");
     accel::AccelSampler::pin_assignments accel_pins;
-	accel_pins.adc_x = BOARD_ADC_IN0;
-	accel_pins.adc_y = BOARD_ADC_IN1;
-	accel_pins.adc_z = BOARD_ADC_IN2;
+    accel_pins.adc_x = BOARD_ADC_IN0;
+    accel_pins.adc_y = BOARD_ADC_IN1;
+    accel_pins.adc_z = BOARD_ADC_IN2;
     accel::AccelSampler accel(accel_pins, accel_buf, ARRAY_COUNT(accel_buf));
     if (!accel.init()) {
-		SerialUSB.println("Error: unable to init accel module.");
-		while (true);
+        SerialUSB.println("Error: unable to init accel module.");
+        while (true);
     }
     accel.calibrate();
 

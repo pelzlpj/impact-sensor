@@ -32,23 +32,23 @@ adler32(const uint8_t * const data, const size_t data_len, const uint32_t seed)
 uint32_t
 sqrt_uint32(const uint32_t val)
 {
-	const uint64_t val64 = val;
+    const uint64_t val64 = val;
 
     uint32_t lo = 0;
     uint32_t hi = (val / 2) + 1;
     while (lo + 1 < hi) {
         const uint64_t mid  = (lo + hi) / 2;
-		const uint64_t mid2 = mid * mid;
+        const uint64_t mid2 = mid * mid;
         if (mid2 < val64) {
             lo = mid;
         } else if (mid2 > val64) {
             hi = mid;
         } else {
-			return mid;
-		}
+            return mid;
+        }
     }
 
-	return (lo * lo) == val ? lo : hi;
+    return (lo * lo) == val ? lo : hi;
 }
 
 
