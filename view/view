@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import tty
 from zlib import adler32
 
 import pylab
@@ -41,6 +42,8 @@ MAX_ACCEL_MAGNITUDE = math.sqrt( ((1 << 12) ** 2) * 3.0 )
 MAX_ADXL377_MAGNITUDE_G = 200.0
 
 SAMPLE_PERIOD_USEC = 125.0
+
+RFCOMM_DEV = '/dev/rfcomm0'
 
 
 def get_rn42_address():
@@ -81,72 +84,54 @@ class RN42ConnectionManager(object):
 
         self._lock           = threading.Lock()
         self._exit_requested = False    # guarded by _lock
-        self._proc           = None     # guarded by _lock
-        self._rfcomm_dev     = None     # guarded by _lock
+        self._has_rfcomm_dev = False    # guarded by _lock
 
-        self._thread = threading.Thread(target=self._rfcomm_thread)
+        print('Now scanning for RN42 devices.')
+        self._thread = threading.Thread(target=self._scan_thread)
         self._thread.start()
 
     def get_rfcomm_device(self):
-        """Poll the rfcomm process to determine whether or not the connection
-        state has changed.  The caller should be prepared for failure when opening
-        the rfcomm device, as it may disappear at any time.
-
-        Returns: rfcomm device associated with the connected RN42 (i.e. '/dev/rfcomm0'),
-        or None if the connection is currently broken.
+        """Returns: path to rfcomm device node, if device has been found
+        by scan, or None if device has never appeared.
         """
-        with self._lock:
-            return self._rfcomm_dev
+        return RFCOMM_DEV if self._has_rfcomm_dev else None
 
-    def terminate(self):
+    def close(self):
         """Drop connection and clean up."""
         with self._lock:
             self._exit_requested = True
-            if self._proc:
-                self._proc.terminate()
+            if self._has_rfcomm_dev:
+                rc = subprocess.call( ('rfcomm', 'release', '0') )
+                logging.info('rfcomm release exit code: %u' % rc)
         self._thread.join()
         self._agent_proc.terminate()
         self._agent_proc.communicate()
 
-    def _rfcomm_thread(self):
+    def _scan_thread(self):
+        """Scan for an RN42 device.  When one is found, use "rfcomm bind" to
+        attach it to /dev/rfcomm0.
+        """
         bluetooth_address = None
         logging.basicConfig(filename='rfcomm.log', level=logging.DEBUG)
 
         while True:
             with self._lock:
                 if self._exit_requested:
-                    logging.info('Normal exit.')
+                    logging.info('Exiting by request.')
                     return
-                if bluetooth_address and not self._proc:
-                    # We need to read rfcomm stdout promptly in order to get
-                    # realtime connection status.  'stdbuf' is used to turn off
-                    # stdout buffering in the rfcomm process.  '-r' flag is
-                    # passed to rfcomm in order to instantiate a raw device
-                    # instead of a tty (since we are transmitting binary data).
-                    logging.info('Starting rfcomm.')
-                    self._proc = subprocess.Popen(
-                            ('stdbuf', '-o0', 'rfcomm', '-r', 'connect', self._host_dev,
-                                bluetooth_address),
-                            stdout=subprocess.PIPE)
+                if bluetooth_address and not self._has_rfcomm_dev:
+                    subprocess.check_call(
+                            ('rfcomm', 'bind', self._host_dev, bluetooth_address))
+                    self._has_rfcomm_dev = True
+                    logging.info('RN42 link bound to %s.  Normal exit.' % RFCOMM_DEV)
+                    return
 
             if not bluetooth_address:
                 bluetooth_address = get_rn42_address()
                 if bluetooth_address:
+                    print('RN42 located at address %s' % bluetooth_address)
                     logging.info('RN42 located at address %s' % bluetooth_address)
 
-            if self._proc:
-                line = self._proc.stdout.readline()
-                logging.info('rfcomm stdout: \"%s\"' % line.rstrip())
-                if not line:
-                    self._proc.wait()
-                    logging.info('rfcomm exit code: %u' % self._proc.returncode)
-                    with self._lock:
-                        self._proc       = None
-                        self._rfcomm_dev = None
-                elif line.startswith('Connected '):
-                    with self._lock:
-                        self._rfcomm_dev = line.split(' ')[1]
-                    logging.info('New rfcomm device: %s' % self._rfcomm_dev)
 
 
 class DataDownloader(object):
@@ -175,7 +160,7 @@ class DataDownloader(object):
             self._payload = None
         return result
 
-    def terminate(self):
+    def close(self):
         """Stop downloading data as soon as possible."""
         with self._lock:
             self._exit_requested = True
@@ -195,8 +180,10 @@ class DataDownloader(object):
                     except OSError:
                         continue
                     try:
-                        # Set non-blocking mode for better handling of exceptional
-                        # conditions.
+                        # rfcomm configures a TTY; we convert it to a raw device in order to
+                        # transfer binary data.  Also set non-blocking mode for better handling of
+                        # exceptional conditions.
+                        tty.setraw(fd)
                         flags = fcntl.fcntl(fd, fcntl.F_GETFL)
                         fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
@@ -301,19 +288,13 @@ def make_plot(samples):
 
 
 if __name__ == '__main__':
-    conn = RN42ConnectionManager('hci0')
-    try:
-        downloader = DataDownloader(conn)
-        try:
+    with contextlib.closing(RN42ConnectionManager('hci0')) as conn:
+        with contextlib.closing(DataDownloader(conn)) as downloader:
             while True:
                 payload = downloader.get_payload()
                 if payload is not None:
                     print('New payload of size %u bytes.' % len(payload))
                     make_plot(decode_payload(payload))
                 time.sleep(0.1)
-        finally:
-            downloader.terminate()
-    finally:
-        conn.terminate()
 
 
