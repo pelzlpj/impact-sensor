@@ -1,3 +1,12 @@
+/******************************************************************************
+ * RN42
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Code for managing an RN42 bluetooth module connected to one of the
+ * STM32 USARTs.
+ ******************************************************************************/
 
 #include <cstring>
 #include "RN42.h"

@@ -1,5 +1,5 @@
 #include <cstring>
-#include "Accel.h"
+#include "AccelSampler.h"
 #include <wirish/wirish.h>
 #include "RN42.h"
 #include "util.h"
@@ -25,7 +25,7 @@ namespace {
         bluetooth::RN42 * const rn42;
 
         // Accelerometer module used for data capture
-        AccelSampler * const accel;
+        accel::AccelSampler * const accel;
 
         // Offset into <accel_buf> ring buffer where captured
         // data begins
@@ -170,11 +170,11 @@ int main(void) {
     rn42.assert_reset();
 
     SerialUSB.println("Accelerometer/ADC init...");
-    AccelSampler::pin_assignments accel_pins;
+    accel::AccelSampler::pin_assignments accel_pins;
 	accel_pins.adc_x = BOARD_ADC_IN0;
 	accel_pins.adc_y = BOARD_ADC_IN1;
 	accel_pins.adc_z = BOARD_ADC_IN2;
-    AccelSampler accel(accel_pins, accel_buf, ARRAY_COUNT(accel_buf));
+    accel::AccelSampler accel(accel_pins, accel_buf, ARRAY_COUNT(accel_buf));
     if (!accel.init()) {
 		SerialUSB.println("Error: unable to init accel module.");
 		while (true);

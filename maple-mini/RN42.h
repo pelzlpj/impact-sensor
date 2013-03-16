@@ -1,3 +1,12 @@
+/******************************************************************************
+ * RN42
+ *
+ * Copyright (C) 2013 Paul Pelzl
+ * Simplified BSD license.  See README.md for details.
+ *
+ * Code for managing an RN42 bluetooth module connected to one of the
+ * STM32 USARTs.
+ ******************************************************************************/
 
 #ifndef INCLUDE_GUARD_9d8d2841_e2ce_48b2_b74c_c1808234d18e
 #define INCLUDE_GUARD_9d8d2841_e2ce_48b2_b74c_c1808234d18e
@@ -62,7 +71,9 @@ public:
     // Returns: RN42 connection state
     bool is_connected(void);
 
-    // Returns: handle to the serial device attached to the RN42
+    // Returns: handle to the serial device attached to the RN42.  When
+    // is_connected()==true, this instance can be used for communication with
+    // the remote host.
     HardwareSerial * serial(void);
 };
 

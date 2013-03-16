@@ -40,7 +40,7 @@ LDFLAGS  = $(TARGET_LDFLAGS) $(TOOLCHAIN_LDFLAGS) -mcpu=cortex-m3 -mthumb \
            -Xassembler --march=armv7-m -Wall
 
 
-ACCEL_SRC := util.cpp serial_util.cpp RN42.cpp main.cpp
+ACCEL_SRC := util.cpp serial_util.cpp RN42.cpp AccelSampler.cpp main.cpp
 
 ACCEL_OBJ := $(addprefix $(BUILD_PATH)/,$(ACCEL_SRC:.cpp=.o))
 
