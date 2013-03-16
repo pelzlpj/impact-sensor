@@ -1,4 +1,16 @@
 #!/usr/bin/env python2.7
+#
+# Copyright (C) 2013 Paul Pelzl.
+# Simplified BSD license; see README.md for details.
+#
+# Simple application for downloading sample data via the bluetooth link, and
+# displaying some nice plots using matplotlib.
+#
+# Intended for use on Linux.
+#
+# Prerequisites: matplotlib, bluetooth-agent, rfcomm.
+# 
+# Run with 'sudo' to give rfcomm sufficient privilege to create device nodes.
 
 from __future__ import print_function
 
@@ -6,6 +18,7 @@ import contextlib
 import errno
 import fcntl
 import logging
+import math
 import os
 import struct
 import subprocess
@@ -18,6 +31,17 @@ from zlib import adler32
 import pylab
 
 DOWNLOAD_IDLE_SEC = 0.1
+
+
+# The ADC captures 12-bit signed data, which means the maximum magnitude on a
+# channel is 11-bit.  The firmware saves an approximation of the vector
+# magnitude measured across three channels.
+MAX_ACCEL_MAGNITUDE = math.sqrt( ((1 << 12) ** 2) * 3.0 )
+
+# Approximate maximum magnitude of the ADXL377
+MAX_ADXL377_MAGNITUDE_G = 200.0
+
+SAMPLE_PERIOD_USEC = 125.0
 
 
 def get_rn42_address():
@@ -219,7 +243,6 @@ class DataDownloader(object):
                     time.sleep(0.01)
         return result
 
-
     def _request_payload(self, fd):
         os.write(fd, 'send\r\n')
 
@@ -257,6 +280,27 @@ def decode_payload(payload):
     return result
 
 
+def g_of_sample(sample):
+    """Given an acceleration magnitude sample measured by the firmware,
+    compute the acceleration in units of 'g'.
+
+    Returns: acceleration in 'g' (float)
+    """
+    return MAX_ADXL377_MAGNITUDE_G * float(sample) / MAX_ACCEL_MAGNITUDE
+
+
+def make_plot(samples):
+    """Generate a plot to represent the list of sample data."""
+    y = [g_of_sample(s) for s in samples]
+    t = [SAMPLE_PERIOD_USEC * x / 1000.0 for x in xrange(len(samples))]
+    pylab.plot(t, y)
+    pylab.ylim( (0, 100) )
+    pylab.title(u'Acceleration vs. Time')
+    pylab.xlabel(u'Time (ms)')
+    pylab.ylabel(u'Magnitude of Acceleration (g)')
+    pylab.show()
+
+
 if __name__ == '__main__':
     conn = RN42ConnectionManager('hci0')
     try:
@@ -266,10 +310,7 @@ if __name__ == '__main__':
                 payload = downloader.get_payload()
                 if payload is not None:
                     print('New payload of size %u bytes.' % len(payload))
-                    y = decode_payload(payload)
-                    x = range(len(y))
-                    pylab.plot(x, y)
-                    pylab.show()
+                    make_plot(decode_payload(payload))
                 time.sleep(0.1)
         finally:
             downloader.terminate()
